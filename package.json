@@ -1,0 +1,33 @@
+{
+  "name": "cortexos",
+  "version": "0.1.0",
+  "description": "Multi-AI CLI orchestrator with shared persistent memory",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cortex": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.0",
+    "commander": "^13.1.0",
+    "grammy": "^1.35.0",
+    "pg": "^8.13.0",
+    "pgvector": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
