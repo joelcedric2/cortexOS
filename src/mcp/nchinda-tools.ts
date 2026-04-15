@@ -18,6 +18,8 @@ import type {
   MemorySearchResult,
 } from "../memory/vector-store.js";
 import type { Embedder } from "../memory/embedder.js";
+import { CronJobsDB } from "../scheduler/_cron-jobs-db-stub.js";
+import { parseNl, type ParseNlOptions } from "../scheduler/nl-parser.js";
 
 // --------------------------- Schemas ---------------------------------------
 
@@ -42,6 +44,25 @@ const RememberInputSchema = z.object({
 
 export type RecallInput = z.infer<typeof RecallInputSchema>;
 export type RememberInput = z.infer<typeof RememberInputSchema>;
+
+const ScheduleInputSchema = z.object({
+  utterance: z.string().min(1).max(2_000),
+  autoEnable: z.boolean().default(false),
+  createdBy: z.enum(["user", "nchinda_proactive"]).default("user"),
+  timezone: z.string().min(1).max(64).optional(),
+});
+
+export type ScheduleInput = z.infer<typeof ScheduleInputSchema>;
+
+export interface ScheduleResult {
+  job_id: string;
+  cron_expr: string;
+  next_run: string;
+  rationale: string;
+  confidence: number;
+  enabled: boolean;
+  extractedTask?: string;
+}
 
 // --------------------------- Output types ---------------------------------
 
@@ -70,6 +91,10 @@ export interface NchindaToolsDeps {
   resolveAgentRole?: () => string | undefined;
   /** Wall clock, injectable for tests. */
   now?: () => Date;
+  /** Cron persistence. Injected by caller; required for `schedule()`. */
+  cronDb?: CronJobsDB;
+  /** Override parseNl options (test seam). */
+  parseNlOptions?: ParseNlOptions;
 }
 
 // --------------------------- Handlers --------------------------------------
@@ -147,7 +172,61 @@ export class NchindaTools {
 
     const now = this.deps.now?.() ?? new Date();
     return { id, stored_at: now.toISOString() };
+
+  /**
+   * nchinda_schedule(utterance, autoEnable?, createdBy?) → create a cron job
+   * from a natural-language schedule phrase. Flow: parseNl → db.insert →
+   * optionally db.update({enabled: true}) → return summary.
+   */
+  async schedule(raw: unknown): Promise<ScheduleResult> {
+    if (!this.deps.cronDb) {
+      throw new Error("nchinda_schedule: cronDb dependency not provided");
+    }
+    const input = ScheduleInputSchema.parse(raw);
+    const parsed = await parseNl(input.utterance, {
+      ...(this.deps.parseNlOptions ?? {}),
+      ...(input.timezone ? { timezone: input.timezone } : {}),
+    });
+    const name = deriveJobName(parsed.extractedTask ?? input.utterance);
+    const task = parsed.extractedTask ?? input.utterance;
+    const job = this.deps.cronDb.insert({
+      name,
+      cron_expr: parsed.cron_expr,
+      task,
+      enabled: false,
+      timezone: parsed.timezone,
+      created_by: input.createdBy,
+    });
+    if (input.autoEnable) {
+      this.deps.cronDb.update(job.id, { enabled: true });
+    }
+    const fresh = this.deps.cronDb.getById(job.id);
+    if (!fresh) throw new Error("schedule: row vanished after insert");
+    return {
+      job_id: fresh.id,
+      cron_expr: fresh.cron_expr,
+      next_run: fresh.next_run.toISOString(),
+      rationale: parsed.rationale,
+      confidence: parsed.confidence,
+      enabled: fresh.enabled,
+      extractedTask: parsed.extractedTask,
+    };
   }
+}
+
+
+/**
+ * Best-effort snake_case job name derived from the utterance. Keeps only
+ * alphanumerics + underscores, caps length at 64. Prefixes with `nl_` so
+ * user-created rows are visually distinct from onboarding-seeded defaults.
+ */
+function deriveJobName(input: string): string {
+  const base = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48) || "job";
+  return `nl_${base}_${Date.now().toString(36).slice(-6)}`.slice(0, 64);
 }
 
 export function createNchindaTools(deps: NchindaToolsDeps): NchindaTools {
