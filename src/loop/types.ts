@@ -9,41 +9,20 @@
  * the rules in §2.2.
  */
 import type { Plan } from "../orchestrator/plan-schema.js";
+import type { ClassificationResult } from "../classifier/classifier.js";
 
-// ─── Classifier contract (owned by Agent B, `src/classifier/classifier.ts`) ─
-// Declared here verbatim while the two Phase-2 branches ship in parallel.
-// On merge these declarations should be deleted in favor of:
-//
-//   import type { … } from "../classifier/classifier.js";
-//
-// Any drift between this copy and Agent B's canonical file is a merge bug.
-// See `docs/phase-2/DECISIONS.md` §D6.
-
-/** Two-way routing decision. Everything downstream keys off this literal. */
-export type TaskComplexity = "single-shot" | "multi-agent";
-
-export interface ClassificationResult {
-  complexity: TaskComplexity;
-  confidence: number;
-  rationale: string;
-  suggested_role?: string;
-}
-
-export interface ClassifierContext {
-  recentMemories?: string[];
-}
-
-export interface ClassifyOptions {
-  force_heuristic?: boolean;
-}
-
-export interface Classifier {
-  classify(
-    task: string,
-    ctx?: ClassifierContext,
-    opts?: ClassifyOptions,
-  ): Promise<ClassificationResult>;
-}
+// ─── Classifier contract (canonical home: `src/classifier/classifier.ts`) ───
+// Re-exported from the classifier module so the loop and the classifier agree
+// on a single definition. Prior to the Phase-2 integration merge this block
+// was a verbatim duplicate per DECISIONS.md §D6; it is now consolidated to
+// the canonical source to eliminate any possibility of drift.
+export type {
+  Classifier,
+  ClassificationResult,
+  ClassifierContext,
+  ClassifyOptions,
+  TaskComplexity,
+} from "../classifier/classifier.js";
 
 /** Every state the loop transitions through. Plan §2 diagram. */
 export type LoopState =
