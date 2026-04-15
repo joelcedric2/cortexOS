@@ -15,7 +15,10 @@ export type EventKind =
   | "plan_emitted"
   // Appended by Agent A (Phase 2 — Autonomy Loop). Agent B may append more
   // kinds at the end; do not re-order.
-  | "loop_state";
+  | "loop_state"
+  // Appended by Agent A (Phase 2.5 — Research Agent). Emitted once per
+  // completed H→P→R→B loop with the Brief as payload.
+  | "research_brief_emitted";
 
 export interface AgentEvent {
   kind: EventKind;
