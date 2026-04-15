@@ -62,10 +62,13 @@ const IRREVERSIBLE_PATTERNS: readonly IrreversiblePattern[] = Object.freeze([
  * "touched creds" from "generic irreversible action" in its reason code.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = Object.freeze([
-  /\b\.env\b/i,
-  /\b(?:AWS|GCP|AZURE)[_\s-]?(?:SECRET|KEY|TOKEN)\b/i,
+  // `.env`, `.env.production`, etc. Leading non-word char (or SOL), then the literal dot.
+  /(?:^|[^A-Za-z0-9])\.env(?:\.\w+)?\b/i,
+  // AWS_SECRET_KEY, GCP-TOKEN, AZURE SECRET, etc.
+  /\b(?:AWS|GCP|AZURE)[_\s-](?:SECRET|KEY|TOKEN|ACCESS)(?:[_\s-]\w+)*\b/i,
   /\b(?:private[_\s-]?key|id_rsa|ssh[_\s-]?key)\b/i,
   /\bkeychain\b/i,
+  /\bsecrets?\b/i,
 ]);
 
 export interface EscalationContext {
