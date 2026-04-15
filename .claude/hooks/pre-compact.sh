@@ -1,0 +1,1 @@
+/Users/joelc/Documents/Github/cortexOS/scripts/claude-hooks/pre-compact.sh
