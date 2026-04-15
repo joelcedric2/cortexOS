@@ -172,10 +172,66 @@ export const NCHINDA_RESEARCH_SCHEMA: McpToolSchema = {
   },
 };
 
+export const WEB_SEARCH_SCHEMA: McpToolSchema = {
+  name: "web_search",
+  description:
+    "Generic web search. Uses Tavily when TAVILY_API_KEY is set, falls back to a dev-only DuckDuckGo HTML scraper. Returns up to 10 results, each with title/url/snippet (snippet truncated to 500 chars). Never throws — on any failure (network, timeout, schema) resolves to [] with a redacted warning.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "The natural-language search query.",
+        minLength: 1,
+      },
+      limit: {
+        type: "integer",
+        description: "Max results to return. Clamped to 10.",
+        minimum: 1,
+        maximum: 10,
+      },
+      timeoutMs: {
+        type: "integer",
+        description: "Per-request timeout in ms. Default 8000.",
+        minimum: 500,
+        maximum: 60000,
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+export const TOOL_DISCOVERY_SCHEMA: McpToolSchema = {
+  name: "tool_discovery",
+  description:
+    "Meta-tool. Given a natural-language need, asks Claude Haiku to pick the top 3 tools from our catalog. Returns {name, confidence (0..1), rationale}. Use this when you're unsure which tool to call. Never throws — returns [] on any LLM/network failure.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      need: {
+        type: "string",
+        description: "Natural-language description of what you want to do.",
+        minLength: 1,
+      },
+      timeoutMs: {
+        type: "integer",
+        description: "Per-call timeout in ms. Default 8000.",
+        minimum: 500,
+        maximum: 60000,
+      },
+    },
+    required: ["need"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
   NCHINDA_REMEMBER_SCHEMA,
   NCHINDA_SCHEDULE_SCHEMA,
   NCHINDA_RESEARCH_SCHEMA,
+  WEB_SEARCH_SCHEMA,
+  TOOL_DISCOVERY_SCHEMA,
 ];
