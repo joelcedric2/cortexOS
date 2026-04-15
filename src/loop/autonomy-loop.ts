@@ -27,6 +27,7 @@ import type {
   FallbackContext,
   FallbackStrategy,
   LoopBudget,
+  LoopOutcome,
   LoopResult,
   LoopState,
   SpentBudget,
@@ -312,15 +313,32 @@ export class AutonomyLoop {
     });
   }
 
-  private finalize(result: LoopResult): LoopResult {
+  private finalize(result: Omit<LoopResult, "outcome">): LoopResult {
+    const outcome: LoopOutcome = deriveOutcome(result.state, result.attempts);
+    const full: LoopResult = { ...result, outcome };
     this.bus.emit({
       kind: "loop_state",
-      task_id: result.taskId,
+      task_id: full.taskId,
       ts: this.now(),
-      payload: { state: result.state, attempt: result.attempts.length },
+      payload: { state: full.state, attempt: full.attempts.length },
     });
-    return result;
+    return full;
   }
+}
+
+/**
+ * Derive the user-facing `outcome` from terminal `state` + attempt history.
+ * A DONE state after at least one ADAPT entry is the Phase-2 DoD "recovered"
+ * case; a DONE with no ADAPTs is a clean first-attempt win.
+ */
+function deriveOutcome(
+  state: "DONE" | "FAILED" | "ESCALATED",
+  attempts: AttemptRecord[],
+): LoopOutcome {
+  if (state === "ESCALATED") return "escalated";
+  if (state === "FAILED") return "failed";
+  // DONE: differentiate first-attempt success vs recovery-after-adapt.
+  return attempts.some((a) => a.state === "ADAPT") ? "recovered" : "done";
 }
 
 function toError(err: unknown): Error {

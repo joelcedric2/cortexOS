@@ -98,10 +98,22 @@ export interface AttemptRecord {
   endedAt: Date;
 }
 
+/**
+ * Outcome descriptor — derived from `state` + attempt history.
+ *
+ *   "done"       — completed on the first ATTEMPT (no fallback needed)
+ *   "recovered"  — completed AFTER at least one ADAPT (the Phase 2 DoD case)
+ *   "failed"     — terminated without escalation (reserved for future use)
+ *   "escalated"  — handed off to the user per policy
+ */
+export type LoopOutcome = "done" | "recovered" | "failed" | "escalated";
+
 export interface LoopResult {
   task: string;
   taskId: string;
   state: "DONE" | "FAILED" | "ESCALATED";
+  /** Derived descriptor — see LoopOutcome. Populated by the loop on finalize. */
+  outcome: LoopOutcome;
   attempts: AttemptRecord[];
   escalation?: EscalationDecision;
   finalError?: string;
