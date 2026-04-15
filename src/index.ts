@@ -96,6 +96,7 @@ program
     // Claude Code Stop/PreCompact hook events posted to the HTTP hooks server.
     const orchestrator = new Orchestrator(cortex, new TmuxManager(), {
       bus: cortex.getBus(),
+      briefStore: cortex.getBriefStore(),
     });
 
     await orchestrator.execute(task);
