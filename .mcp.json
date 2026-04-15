@@ -17,6 +17,16 @@
         "CLAUDE_FLOW_MEMORY_BACKEND": "hybrid"
       },
       "autoStart": false
+    },
+    "nchinda": {
+      "command": "node",
+      "args": [
+        "scripts/mcp/serve-nchinda.mjs"
+      ],
+      "env": {
+        "DATABASE_URL": "postgres://localhost/cortexos"
+      },
+      "autoStart": false
     }
   }
 }

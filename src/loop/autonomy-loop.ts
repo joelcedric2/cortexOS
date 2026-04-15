@@ -286,7 +286,17 @@ export class AutonomyLoop {
       let applies = false;
       try {
         applies = Boolean(await strategy.canHandle(ctx));
-      } catch {
+      } catch (err) {
+        // A buggy canHandle must not silently skip — trace it so a debugger
+        // can see why this rung never applies. Still degrade-to-continue.
+        const msg = err instanceof Error ? err.message : String(err);
+        this.bus.emit({
+          kind: "error",
+          task_id: ctx.taskId,
+          payload: { where: "walkLadder.canHandle", rung: strategy.name, message: msg },
+          ts: new Date(),
+        });
+        this.attemptsLog?.recordStrategyError?.(ctx.taskId, strategy.name, "canHandle", msg);
         applies = false;
       }
       if (!applies) continue;
@@ -296,8 +306,16 @@ export class AutonomyLoop {
         if (outcome.handled) {
           return { strategy, outcome };
         }
-      } catch {
-        // Strategy exploded — move on. Escalation happens if no one handles.
+      } catch (err) {
+        // Strategy blew up mid-apply. Emit + persist so failures are debuggable.
+        const msg = err instanceof Error ? err.message : String(err);
+        this.bus.emit({
+          kind: "error",
+          task_id: ctx.taskId,
+          payload: { where: "walkLadder.apply", rung: strategy.name, message: msg },
+          ts: new Date(),
+        });
+        this.attemptsLog?.recordStrategyError?.(ctx.taskId, strategy.name, "apply", msg);
         continue;
       }
     }

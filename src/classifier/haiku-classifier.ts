@@ -23,6 +23,30 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_TIMEOUT_MS = 8_000;
 
 /**
+ * The `rationale` field is part of the classifier's return value and may be
+ * surfaced to the user / written to memory. The raw error text from an SDK
+ * or fetch failure can contain API keys, hostnames, or other bootstrapping
+ * detail we don't want to leak. Whitelist only known-safe error categories
+ * and describe anything else with a generic label.
+ */
+const SAFE_REASON_PATTERNS: ReadonlyArray<{ match: RegExp; label: string }> = [
+  { match: /abort|timeout|deadline/i, label: "timeout" },
+  { match: /429|rate.?limit/i, label: "rate-limited" },
+  { match: /\b(5\d\d)\b/, label: "server-error" },
+  { match: /\b(4\d\d)\b/, label: "client-error" },
+  { match: /invalid.*json|unexpected token|parse/i, label: "parse-error" },
+  { match: /schema|zod|invalid response/i, label: "schema-mismatch" },
+  { match: /econn|enotfound|network|fetch/i, label: "network" },
+];
+
+function redactHaikuReason(reason: string): string {
+  for (const { match, label } of SAFE_REASON_PATTERNS) {
+    if (match.test(reason)) return label;
+  }
+  return "unknown";
+}
+
+/**
  * Schema the LLM must emit. Matches `ClassificationResult` but validated at
  * the boundary — the model can and will hallucinate field names otherwise.
  */
@@ -81,7 +105,7 @@ export class HaikuClassifier implements Classifier {
       const fallback = await this.heuristic.classify(task, ctx, opts);
       return {
         ...fallback,
-        rationale: `[haiku-fallback: ${reason}] ${fallback.rationale}`,
+        rationale: `[haiku-fallback: ${redactHaikuReason(reason)}] ${fallback.rationale}`,
       };
     }
   }

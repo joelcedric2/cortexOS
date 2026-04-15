@@ -52,6 +52,13 @@ const IRREVERSIBLE_PATTERNS: readonly IrreversiblePattern[] = Object.freeze([
   { action: IrreversibleAction.EmailSend, pattern: /\bsend\s+(?:an?\s+)?email\b/i },
   { action: IrreversibleAction.PaymentCharge, pattern: /\b(?:charge|pay|transfer|wire)\b[^\n]*\$?\d+/i },
   { action: IrreversibleAction.Deploy, pattern: /\b(?:deploy|publish|release)\b[^\n]*(?:prod|production|live)/i },
+  // Standalone package publishing (no "prod" qualifier needed — always irreversible)
+  { action: IrreversibleAction.Deploy, pattern: /\bnpm\s+publish\b/i },
+  { action: IrreversibleAction.Deploy, pattern: /\b(?:pip|cargo|gem|yarn)\s+publish\b/i },
+  // Informal "ship to prod" / "push to prod" phrasing
+  { action: IrreversibleAction.Deploy, pattern: /\b(?:ship|push)\b[^\n]*\bto\b[^\n]*(?:prod|production|live)\b/i },
+  // Hyphenated force-push forms (common in chat/shorthand)
+  { action: IrreversibleAction.GitPushForce, pattern: /\bforce[- ]push\b/i },
   { action: IrreversibleAction.CredentialWrite, pattern: /\b(?:api[_\s-]?key|secret|token|password|credential)s?\b[^\n]*(?:=|:|\bto\b)/i },
   { action: IrreversibleAction.SudoInstall, pattern: /\bsudo\s+(?:rm|dd|mkfs|reboot|shutdown|chown|chmod)\b/i },
 ]);

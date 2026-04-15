@@ -117,6 +117,22 @@ export class LoopAttemptLog {
       .all(taskId) as LoopAttemptRow[];
   }
 
+  /**
+   * Non-attempt row: record a buggy-strategy exception so walkLadder failures
+   * show up in the trace. Added in the Phase 2 review pass to close a
+   * debuggability hole (REVIEW.md #2).
+   */
+  recordStrategyError(taskId: string, strategy: string, where: "canHandle" | "apply", message: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO loop_attempts
+           (task_id, attempt, state, rung, strategy, error, note, started_at, ended_at)
+         VALUES (?, 0, 'STRATEGY_ERROR', NULL, ?, ?, ?, ?, ?)`,
+      )
+      .run(taskId, strategy, message, `walkLadder.${where}`, now, now);
+  }
+
   /** Close the DB if we opened it ourselves. No-op when sharing. */
   close(): void {
     if (this.owned) this.db.close();
