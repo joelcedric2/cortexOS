@@ -1,176 +1,395 @@
 import type { CortexController } from "../controller/cortex.js";
 import type { TmuxManager } from "../tmux/tmux-manager.js";
-import { nextAgentId, getRoleDefinition } from "../agents/roles.js";
+import { nextAgentId, getRoleDefinition, isValidRole } from "../agents/roles.js";
 import type { AgentRole } from "../agents/roles.js";
+import type { AgentProvider } from "../agents/agent.js";
+import {
+  EMIT_PLAN_PROMPT_FRAGMENT,
+  extractEmittedPlan,
+} from "../agents/claude-agent.js";
+import {
+  parsePlan,
+  type Plan,
+  type PlanAgent,
+} from "./plan-schema.js";
+import {
+  AgentRegistry,
+  getAgentRegistry,
+} from "../registry/agent-registry.js";
+import {
+  createEventBus,
+  type AgentEvent,
+  type EventBus,
+} from "../ipc/event-bus.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
+const DEFAULT_DONE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min per agent
+const DEFAULT_DESIGNER_TIMEOUT_MS = 10 * 60 * 1000;
+
+export interface OrchestratorDeps {
+  /** Override the process-wide registry. Primarily for tests. */
+  registry?: AgentRegistry;
+  /** Override the event bus. Production should use the real IPC-backed bus. */
+  bus?: EventBus;
+  /** Hook for capturing Designer output — injectable for tests. */
+  capturePaneOutput?: (slot: number) => Promise<string>;
+  /** Hook for waiting until a spawned CLI is at its ❯ prompt. Injectable. */
+  waitForReady?: (slot: number) => Promise<void>;
+  /** Per-agent `done` timeout in ms. Default 10 minutes. */
+  doneTimeoutMs?: number;
+  /** Designer planning timeout in ms. Default 10 minutes. */
+  designerTimeoutMs?: number;
+}
+
+interface SpawnedExecutor {
+  slot: number;
+  id: string;
+  role: AgentRole;
+  planRole: string;
+  agent: PlanAgent;
+}
+
 /**
- * CortexOS Orchestrator — the brain.
+ * CortexOS Orchestrator — the brain (Phase 1 rewrite, Nchinda §6 Phase 1).
  *
  * Flow:
- *  1. User gives a task
- *  2. RES0 (Researcher/System Designer) is spawned in slot 0, receives the task
- *  3. RES0 analyzes, researches, produces a plan
- *  4. Orchestrator parses RES0's plan output for agent assignments
- *  5. Executing agents are spawned with specific tasks from RES0's plan
- *  6. Executors work in parallel, visible in their own terminals
- *  7. When done, executors report back. RES0 consolidates.
+ *  1. User gives a task.
+ *  2. RES0 (system-designer) is spawned in slot 0 and asked to call `emit_plan`.
+ *  3. Orchestrator parses the structured Plan JSON (loud failure on drift).
+ *  4. Executors are spawned per Plan; each gets a registry row (markRunning).
+ *  5. Orchestrator waits on `done` events via the EventBus — no polling.
+ *  6. Each done event transitions the registry; standby vs done follows policy.
+ *  7. RES0 consolidates (reporting_to agent).
  */
 export class Orchestrator {
-  private agentIds: Map<number, string> = new Map(); // slot -> agent ID like "RES0", "SET0"
+  private readonly agentIds = new Map<number, string>();
+  private readonly registry: AgentRegistry;
+  private readonly bus: EventBus;
+  private readonly doneTimeoutMs: number;
+  private readonly designerTimeoutMs: number;
+  private readonly captureOverride?: (slot: number) => Promise<string>;
+  private readonly readyOverride?: (slot: number) => Promise<void>;
 
   constructor(
     private readonly controller: CortexController,
     private readonly tmux: TmuxManager,
-  ) {}
+    deps: OrchestratorDeps = {},
+  ) {
+    this.registry = deps.registry ?? getAgentRegistry();
+    this.bus = deps.bus ?? createEventBus();
+    this.doneTimeoutMs = deps.doneTimeoutMs ?? DEFAULT_DONE_TIMEOUT_MS;
+    this.designerTimeoutMs =
+      deps.designerTimeoutMs ?? DEFAULT_DESIGNER_TIMEOUT_MS;
+    this.captureOverride = deps.capturePaneOutput;
+    this.readyOverride = deps.waitForReady;
+  }
 
+  /** Primary entry point — drive the end-to-end Phase 1 flow for `task`. */
   async execute(task: string): Promise<void> {
     console.log(`\n[CortexOS] Received task: "${task}"`);
 
-    // Phase 1: Spawn RES0 (Researcher/System Designer) — always slot 0
-    console.log("[CortexOS] Phase 1: Spawning RES0 (Researcher & System Designer)...\n");
+    const taskId = randomUUID();
 
-    const res0Id = nextAgentId("system-designer");
-    const res0Slot = await this.controller.spawnAgent("system-designer", "claude", 0);
+    // ── Phase 1: Designer (RES0) ───────────────────────────────────────────
+    console.log(
+      "[CortexOS] Phase 1: Spawning RES0 (Researcher & System Designer)...\n",
+    );
+
+    const designerRole: AgentRole = "system-designer";
+    const res0Id = nextAgentId(designerRole);
+    const res0Slot = await this.controller.spawnAgent(
+      designerRole,
+      "claude",
+      0,
+    );
     this.agentIds.set(res0Slot, res0Id);
 
-    await this.openTerminal(res0Slot, res0Id, "system-designer");
+    // Register the Designer before the CLI emits anything so later events
+    // landing on the bus can always find it.
+    this.registry.spawn({
+      id: res0Id,
+      role: designerRole,
+      color: "cyan",
+      tmux_session: this.sessionNameForSlot(res0Slot),
+      task_id: taskId,
+    });
+    this.registry.markRunning(res0Id);
 
-    // Wait for RES0 to be ready, then send the planning prompt
+    await this.openTerminal(res0Slot, res0Id, designerRole);
     await this.waitForReady(res0Slot);
 
-    const planningPrompt = this.buildPlanningPrompt(task);
+    const planningPrompt = this.buildPlanningPrompt(task, taskId);
     await this.controller.sendMessage(res0Slot, planningPrompt);
-    console.log(`[CortexOS] ${res0Id} received task. Analyzing and planning...\n`);
+    console.log(
+      `[CortexOS] ${res0Id} received task. Analyzing and planning...\n`,
+    );
 
-    // Wait for RES0 to finish planning
-    await this.waitForCompletion([res0Slot], 120_000);
+    // ── Phase 2: Wait for the plan, parse it ───────────────────────────────
+    const plan = await this.awaitPlan(res0Slot, res0Id, taskId);
 
-    // Phase 2: Read RES0's plan and spawn executors
-    console.log("\n[CortexOS] Phase 2: Parsing RES0's plan and spawning executors...\n");
-
-    const planOutput = await this.captureAgentOutput(res0Slot);
-    const assignments = this.parseAssignments(planOutput, task);
-
-    if (assignments.length === 0) {
-      console.log("[CortexOS] RES0 handled the task directly. No executors needed.");
+    if (plan.complexity === "single-shot" || plan.agents.length === 0) {
+      console.log(
+        "[CortexOS] Designer handled the task directly (single-shot). No executors needed.",
+      );
+      this.registry.markDone(res0Id);
       return;
     }
 
-    // Spawn executors in parallel
-    const executors: { slot: number; id: string; role: AgentRole }[] = [];
-
-    for (const assignment of assignments) {
-      const agentId = nextAgentId(assignment.role);
-      const slot = await this.controller.spawnAgent(assignment.role, assignment.provider);
-      this.agentIds.set(slot, agentId);
-      executors.push({ slot, id: agentId, role: assignment.role });
-
-      await this.openTerminal(slot, agentId, assignment.role);
-      await this.waitForReady(slot);
-      await this.controller.sendMessage(slot, assignment.prompt);
-
-      console.log(`[CortexOS] ${agentId} (${getRoleDefinition(assignment.role).displayName}) → slot ${slot}`);
-    }
-
-    // Phase 3: Monitor executors
-    console.log(`\n[CortexOS] Phase 3: ${executors.length} executor(s) working...\n`);
-    await this.waitForCompletion(
-      executors.map((e) => e.slot),
-      300_000,
+    // ── Phase 3: Spawn executors per Plan ──────────────────────────────────
+    console.log(
+      `\n[CortexOS] Phase 3: Spawning ${plan.agents.length} executor(s) from Plan...\n`,
     );
 
-    // Phase 4: Have RES0 consolidate results
-    console.log("\n[CortexOS] Phase 4: RES0 consolidating results...\n");
+    const executors: SpawnedExecutor[] = [];
+    for (const planAgent of plan.agents) {
+      const executor = await this.spawnExecutor(planAgent, taskId);
+      if (executor) executors.push(executor);
+    }
+
+    if (executors.length === 0) {
+      console.log(
+        "[CortexOS] Plan contained no executable agents after role validation. Aborting.",
+      );
+      this.registry.markError(res0Id);
+      return;
+    }
+
+    // ── Phase 4: Event-driven wait on `done` ───────────────────────────────
+    console.log(
+      `\n[CortexOS] Phase 4: awaiting 'done' events for ${executors.length} executor(s)...\n`,
+    );
+
+    await this.awaitExecutorsDone(executors, taskId);
+
+    // ── Phase 5: Consolidation ─────────────────────────────────────────────
+    console.log("\n[CortexOS] Phase 5: Designer consolidating results...\n");
 
     const summaries: string[] = [];
     for (const ex of executors) {
-      const output = await this.captureAgentOutput(ex.slot);
-      const lastLines = output.split("\n").filter((l) => l.trim()).slice(-30).join("\n");
-      summaries.push(`=== ${ex.id} (${ex.role}) Results ===\n${lastLines}`);
+      const output = await this.capturePaneOutput(ex.slot);
+      const lastLines = output
+        .split("\n")
+        .filter((l) => l.trim())
+        .slice(-30)
+        .join("\n");
+      summaries.push(`=== ${ex.id} (${ex.planRole}) Results ===\n${lastLines}`);
     }
 
-    const consolidationPrompt = `The following agents completed their work. Consolidate their findings into a final report:\n\n${summaries.join("\n\n")}`;
+    const reportingTarget = plan.coordination.reporting_to;
+    const consolidationPrompt =
+      `The following agents completed their work on task ${taskId}. ` +
+      `You (${reportingTarget}) are the reporting target — consolidate their ` +
+      `findings into a final report:\n\n${summaries.join("\n\n")}`;
     await this.controller.sendMessage(res0Slot, consolidationPrompt);
 
-    console.log("[CortexOS] All phases complete. Terminals remain open for review.\n");
+    this.registry.markDone(res0Id);
+    console.log(
+      "[CortexOS] All phases complete. Terminals remain open for review.\n",
+    );
   }
 
-  private buildPlanningPrompt(task: string): string {
-    return `You are RES0, the Researcher & System Designer for CortexOS.
-
-You have been given this task: "${task}"
-
-Analyze the task and create a plan. Your output MUST end with an ASSIGNMENTS block that tells CortexOS which specialist agents to spawn. Use this exact format:
-
----ASSIGNMENTS---
-ROLE: <role-name> | TASK: <specific task for this agent>
-ROLE: <role-name> | TASK: <specific task for this agent>
----END---
-
-Available roles: frontend, backend, security, e2e-tester, internal-apis, cicd, devops-mlops, ai-ml-researcher, visual-tester, security-reviewer, pen-tester
-
-Agent short codes for reference:
-FDD=Frontend, BKD=Backend, SET=Security, PET=PenTester, E2E=E2ETester, API=InternalAPIs, CCD=CI/CD, DVO=DevOps, MLR=ML Researcher, VIT=VisualTester, SRV=SecurityReviewer
-
-First research and analyze the task, then output your plan with the ASSIGNMENTS block.`;
+  /** Exposed for tests and call-sites that already have Plan JSON. */
+  parsePlanJson(json: unknown): Plan {
+    return parsePlan(json);
   }
 
-  private parseAssignments(
-    output: string,
-    fallbackTask: string,
-  ): { role: AgentRole; prompt: string; provider?: "claude" | "gemini" | "codex" }[] {
-    const assignments: { role: AgentRole; prompt: string; provider?: "claude" | "gemini" | "codex" }[] = [];
+  // ─── Designer / plan ───────────────────────────────────────────────────────
 
-    // Try to parse structured assignments from RES0's output
-    const assignmentBlock = output.match(/---ASSIGNMENTS---\s*([\s\S]*?)\s*---END---/);
-    if (assignmentBlock) {
-      const lines = assignmentBlock[1].split("\n").filter((l) => l.trim());
-      for (const line of lines) {
-        const match = line.match(/ROLE:\s*(\S+)\s*\|\s*TASK:\s*(.+)/i);
-        if (match) {
-          const role = match[1].trim() as AgentRole;
-          const prompt = match[2].trim();
-          const def = getRoleDefinition(role);
-          if (def) {
-            assignments.push({ role, prompt, provider: def.defaultProvider });
+  private buildPlanningPrompt(task: string, taskId: string): string {
+    return (
+      `You are RES0, the Researcher & System Designer for CortexOS.\n\n` +
+      `Task ID: ${taskId}\n` +
+      `Goal: "${task}"\n\n` +
+      `Analyze the task, then emit a structured execution Plan.\n\n` +
+      `${EMIT_PLAN_PROMPT_FRAGMENT}\n\n` +
+      `Available example roles (not exhaustive — coin new ones if useful): ` +
+      `coder, frontend, backend, tester, e2e-tester, pentester, security, ` +
+      `researcher, operator, devops, cicd. The Plan's agents[].role field is free-form text.`
+    );
+  }
+
+  /**
+   * Wait for the Designer to emit a Plan. Prefers a `plan_emitted` bus event
+   * (Agent A's Stop/PreCompact hook is expected to push one). Falls back to
+   * the Designer's own `done` event and scrapes the pane for the emit_plan
+   * block if the richer signal didn't land.
+   */
+  private async awaitPlan(
+    slot: number,
+    agentId: string,
+    taskId: string,
+  ): Promise<Plan> {
+    const planEvent = this.bus.once(
+      { kind: "plan_emitted", task_id: taskId },
+      this.designerTimeoutMs,
+    );
+    const doneEvent = this.bus.once(
+      { kind: "done", slot, task_id: taskId },
+      this.designerTimeoutMs,
+    );
+
+    let winner: AgentEvent;
+    try {
+      winner = await Promise.race([planEvent, doneEvent]);
+    } catch (err) {
+      this.registry.markError(agentId);
+      throw err instanceof Error
+        ? err
+        : new Error(`Designer timed out without emitting a plan`);
+    }
+
+    // If the Designer sent a plan directly in the event payload, prefer it.
+    if (winner.kind === "plan_emitted" && winner.payload) {
+      return parsePlan(winner.payload);
+    }
+
+    // Otherwise, read the Designer's pane and extract the emit_plan block.
+    const output = await this.capturePaneOutput(slot);
+    try {
+      return extractEmittedPlan(output);
+    } catch (err) {
+      this.registry.markError(agentId);
+      throw err;
+    }
+  }
+
+  // ─── Executor lifecycle ──────────────────────────────────────────────────
+
+  private async spawnExecutor(
+    planAgent: PlanAgent,
+    taskId: string,
+  ): Promise<SpawnedExecutor | null> {
+    // Map the open-ended Plan role onto a known AgentRole. If we don't
+    // recognize it, fall back to `backend` (the "generic coder" role) so
+    // the Designer can still emit new role names (e.g. "ui-ux") without
+    // blowing up the run, but log loudly for observability.
+    const { role, ok } = resolvePlanRole(planAgent.role);
+    if (!ok) {
+      console.warn(
+        `[CortexOS] Plan role "${planAgent.role}" is not a known AgentRole; mapping to ${role}`,
+      );
+    }
+
+    const def = getRoleDefinition(role);
+    const provider: AgentProvider = def.defaultProvider;
+
+    const agentId = nextAgentId(role);
+    const slot = await this.controller.spawnAgent(role, provider);
+    this.agentIds.set(slot, agentId);
+
+    const sessionName = this.sessionNameForSlot(slot);
+
+    this.registry.spawn({
+      id: agentId,
+      role: planAgent.role,
+      color: planAgent.color,
+      tmux_session: sessionName,
+      worktree: planAgent.worktree ?? null,
+      task_id: taskId,
+    });
+    this.registry.markRunning(agentId);
+
+    await this.openTerminal(slot, agentId, role);
+    await this.waitForReady(slot);
+    await this.controller.sendMessage(slot, this.buildExecutorPrompt(planAgent));
+
+    console.log(
+      `[CortexOS] ${agentId} (${def.displayName}) → slot ${slot} [plan-role="${planAgent.role}", color=${planAgent.color}]`,
+    );
+
+    return { slot, id: agentId, role, planRole: planAgent.role, agent: planAgent };
+  }
+
+  private buildExecutorPrompt(planAgent: PlanAgent): string {
+    const header = planAgent.system_prompt
+      ? `${planAgent.system_prompt}\n\n`
+      : "";
+    return (
+      `${header}Task: ${planAgent.task}\n\n` +
+      `Success criteria: ${planAgent.success_criteria}\n` +
+      `Budget: up to ${planAgent.budget.max_tokens} tokens, ${planAgent.budget.max_minutes} minutes.\n` +
+      (planAgent.depends_on.length
+        ? `Depends on: ${planAgent.depends_on.join(", ")}\n`
+        : "") +
+      (planAgent.worktree ? `Worktree: ${planAgent.worktree}\n` : "")
+    );
+  }
+
+  /**
+   * Event-driven replacement for the old `waitForCompletion` polling loop.
+   *
+   * Subscribes once per executor to `{kind:'done', slot, task_id}` with a
+   * 10-minute timeout (per agent, run in parallel). On receipt, transitions
+   * the registry per `coordination.checkpoints` policy:
+   *
+   *  - if the plan says `checkpoints` includes "on_step_complete" → markDone
+   *  - otherwise → markStandby (keep the session warm for follow-up)
+   *
+   * Errors land as `markError`; timeouts are treated as errors as well.
+   */
+  private async awaitExecutorsDone(
+    executors: SpawnedExecutor[],
+    taskId: string,
+  ): Promise<void> {
+    await Promise.all(
+      executors.map(async (ex) => {
+        try {
+          const event = await this.bus.once(
+            { kind: "done", slot: ex.slot, task_id: taskId },
+            this.doneTimeoutMs,
+          );
+          const payload =
+            typeof event.payload === "object" && event.payload !== null
+              ? (event.payload as { success?: boolean })
+              : {};
+          if (payload.success === false) {
+            this.registry.markError(ex.id);
+            console.error(
+              `[CortexOS] ${ex.id} reported failure on done event.`,
+            );
+            return;
           }
+          const policy =
+            ex.agent.depends_on.length > 0 ? "done" : inferDonePolicy(ex.agent);
+          if (policy === "standby") {
+            this.registry.markStandby(ex.id);
+          } else {
+            this.registry.markDone(ex.id);
+          }
+          console.log(`[CortexOS] ${ex.id} → ${policy}.`);
+        } catch (err) {
+          this.registry.markError(ex.id);
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[CortexOS] ${ex.id} did not emit 'done' in time: ${message}`,
+          );
         }
-      }
-    }
-
-    // Fallback: if RES0 didn't produce structured output, infer from task
-    if (assignments.length === 0) {
-      const lower = fallbackTask.toLowerCase();
-      if (lower.includes("vulnerab") || lower.includes("security") || lower.includes("audit")) {
-        assignments.push(
-          { role: "security", prompt: `Security audit: ${fallbackTask}` },
-          { role: "pen-tester", prompt: `Penetration test: ${fallbackTask}` },
-        );
-      } else if (lower.includes("build") || lower.includes("implement")) {
-        assignments.push(
-          { role: "backend", prompt: `Implement backend: ${fallbackTask}` },
-          { role: "frontend", prompt: `Implement frontend: ${fallbackTask}` },
-        );
-      } else {
-        // Single agent fallback
-        assignments.push({ role: "backend", prompt: fallbackTask });
-      }
-    }
-
-    // Limit to available slots (max 3 rotating)
-    return assignments.slice(0, 3);
+      }),
+    );
   }
 
-  private async openTerminal(slot: number, agentId: string, role: AgentRole): Promise<void> {
-    const handle = (this.controller as any).handles.get(slot);
-    if (!handle) return;
+  // ─── Terminal / pane helpers ────────────────────────────────────────────
 
-    const sessionName = `cortexos_${handle.sessionName}`;
+  private sessionNameForSlot(slot: number): string {
+    const handle = (this.controller as unknown as {
+      handles: Map<number, { sessionName: string }>;
+    }).handles.get(slot);
+    return handle?.sessionName ?? `slot${slot}`;
+  }
+
+  private async openTerminal(
+    slot: number,
+    agentId: string,
+    role: AgentRole,
+  ): Promise<void> {
+    const sessionName = this.sessionNameForSlot(slot);
+    if (!sessionName) return;
+
+    const attachName = `cortexos_${sessionName}`;
     const def = getRoleDefinition(role);
     const title = `${agentId} (${def.displayName})`;
 
@@ -179,18 +398,21 @@ First research and analyze the task, then output your plan with the ASSIGNMENTS 
         "-e",
         `tell application "Terminal"
           activate
-          do script "printf '\\\\e]0;${title}\\\\a' && tmux attach-session -t ${sessionName}"
+          do script "printf '\\\\e]0;${title}\\\\a' && tmux attach-session -t ${attachName}"
         end tell`,
       ]);
       console.log(`[CortexOS] Terminal opened: ${title}`);
     } catch (err) {
-      console.log(`[CortexOS] Could not open terminal: ${err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[CortexOS] Could not open terminal: ${message}`);
     }
   }
 
   private async waitForReady(slot: number): Promise<void> {
-    const handle = (this.controller as any).handles.get(slot);
-    if (!handle) return;
+    if (this.readyOverride) return this.readyOverride(slot);
+
+    const sessionName = this.sessionNameForSlot(slot);
+    if (!sessionName) return;
 
     const maxWait = 50_000;
     const interval = 2_000;
@@ -198,100 +420,61 @@ First research and analyze the task, then output your plan with the ASSIGNMENTS 
 
     while (waited < maxWait) {
       try {
-        const output = await this.tmux.capturePane(handle.sessionName);
+        const output = await this.tmux.capturePane(sessionName);
         if (output.includes("❯") && !output.includes("Enter to confirm")) {
           return;
         }
-      } catch { /* not ready */ }
+      } catch {
+        // Session not yet ready — keep polling until the overall budget is
+        // exhausted. This is a startup check, not a task-completion check.
+      }
       await new Promise((r) => setTimeout(r, interval));
       waited += interval;
     }
   }
 
-  private async captureAgentOutput(slot: number): Promise<string> {
-    const handle = (this.controller as any).handles.get(slot);
-    if (!handle) return "";
-    return this.tmux.capturePane(handle.sessionName, 500);
+  private async capturePaneOutput(slot: number): Promise<string> {
+    if (this.captureOverride) return this.captureOverride(slot);
+    const sessionName = this.sessionNameForSlot(slot);
+    if (!sessionName) return "";
+    return this.tmux.capturePane(sessionName, 500);
   }
+}
 
-  /**
-   * Wait for agents to finish by checking if their Claude Code prompt (❯) is idle.
-   * An agent is "done" when we see ❯ at the end of its output AND
-   * the output hasn't changed for several consecutive polls.
-   */
-  private async waitForCompletion(slots: number[], maxWait: number): Promise<void> {
-    const stableThreshold = 4;
-    const pollInterval = 5_000;
-    const stableCounts = new Map<number, number>();
-    const lastHashes = new Map<number, string>();
-    const hasStarted = new Map<number, boolean>();
+// ─── Internal helpers ─────────────────────────────────────────────────────
 
-    for (const s of slots) {
-      stableCounts.set(s, 0);
-      lastHashes.set(s, "");
-      hasStarted.set(s, false);
-    }
+/**
+ * Map a Plan's open-ended role string onto a known AgentRole. Unknown roles
+ * fall through to `backend` (the "generic coder") so planners can introduce
+ * new role names over time without requiring a code change here.
+ */
+function resolvePlanRole(planRole: string): { role: AgentRole; ok: boolean } {
+  if (isValidRole(planRole)) return { role: planRole, ok: true };
 
-    // Initial delay for agents to start producing output
-    await new Promise((r) => setTimeout(r, 20_000));
+  const aliases: Record<string, AgentRole> = {
+    architect: "system-designer",
+    designer: "system-designer",
+    researcher: "ai-ml-researcher",
+    coder: "backend",
+    operator: "devops-mlops",
+    tester: "e2e-tester",
+    pentester: "pen-tester",
+    ui: "frontend",
+    "ui-ux": "frontend",
+  };
+  const alias = aliases[planRole.toLowerCase()];
+  if (alias) return { role: alias, ok: true };
 
-    let waited = 20_000;
-    while (waited < maxWait) {
-      let allDone = true;
+  return { role: "backend", ok: false };
+}
 
-      for (const slot of slots) {
-        const handle = (this.controller as any).handles.get(slot);
-        if (!handle) { stableCounts.set(slot, stableThreshold); continue; }
-
-        try {
-          const output = await this.tmux.capturePane(handle.sessionName, 50);
-          const hash = createHash("sha256").update(output).digest("hex");
-
-          // Check if agent has started working (output changed from initial)
-          if (hash !== lastHashes.get(slot) && lastHashes.get(slot) !== "") {
-            hasStarted.set(slot, true);
-          }
-
-          if (hash === lastHashes.get(slot)) {
-            stableCounts.set(slot, (stableCounts.get(slot) ?? 0) + 1);
-          } else {
-            stableCounts.set(slot, 0);
-            lastHashes.set(slot, hash);
-          }
-
-          // Agent is done when: output is stable AND it has started AND
-          // the last line shows the ❯ prompt (Claude finished and is waiting)
-          const lines = output.split("\n").filter((l) => l.trim());
-          const lastLine = lines[lines.length - 1] ?? "";
-          const hasPrompt = lastLine.includes("❯") || lastLine.includes("bypass permissions");
-          const isStable = (stableCounts.get(slot) ?? 0) >= stableThreshold;
-          const started = hasStarted.get(slot) ?? false;
-
-          if (!(started && isStable && hasPrompt)) {
-            allDone = false;
-          }
-        } catch {
-          stableCounts.set(slot, stableThreshold);
-        }
-      }
-
-      if (allDone) {
-        console.log("\n[CortexOS] All agents finished.");
-        return;
-      }
-
-      await new Promise((r) => setTimeout(r, pollInterval));
-      waited += pollInterval;
-
-      const parts = slots.map((s) => {
-        const id = this.agentIds.get(s) ?? `slot${s}`;
-        const stable = (stableCounts.get(s) ?? 0) >= stableThreshold;
-        const started = hasStarted.get(s) ?? false;
-        const status = !started ? "starting" : stable ? "done" : "working";
-        return `${id}:${status}`;
-      });
-      process.stdout.write(`\r[CortexOS] ${parts.join(" | ")}  `);
-    }
-    console.log("\n[CortexOS] Timed out.");
-  }
+/**
+ * Policy for what to do after a `done` event. Defaults to `done`; switches to
+ * `standby` only if the Plan explicitly says to keep this role warm via the
+ * `keep_warm` checkpoint flag (future extension).
+ */
+function inferDonePolicy(_planAgent: PlanAgent): "done" | "standby" {
+  // Today: always transition to `done`. Phase 2 will introduce the policy
+  // engine that can keep specific roles in standby for follow-up work.
+  return "done";
 }

@@ -9,7 +9,7 @@ import { MessageRouter } from "../communication/router.js";
 import { ClaudeAgent } from "../agents/claude-agent.js";
 import { GeminiAgent } from "../agents/gemini-agent.js";
 import { CodexAgent } from "../agents/codex-agent.js";
-import { buildAgentClaudeMd } from "../config/roles.js";
+import { buildAgentClaudeMd, colorForRole } from "../config/roles.js";
 import { isValidRole, getRoleDefinition } from "../agents/roles.js";
 import type { AgentRole } from "../agents/roles.js";
 import type { Agent, AgentProvider, AgentHandle } from "../agents/agent.js";
@@ -172,6 +172,14 @@ export class CortexController {
 
     // Create tmux session rooted in the agent's own directory
     await this.tmux.createSession(sessionName, agentWorkDir);
+
+    // Color the pane border by role (Nchinda plan §5.3) — purely cosmetic.
+    try {
+      await this.tmux.setPaneBorderColor(sessionName, colorForRole(role));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CortexOS] Could not set pane border color: ${message}`);
+    }
 
     const handle = await agent.spawn(
       {
