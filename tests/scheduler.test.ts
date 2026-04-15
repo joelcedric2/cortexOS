@@ -193,3 +193,208 @@ describe("CronJobsDB", () => {
     assert.throws(() => db.markRan("missing", "success", 1), /no job with id/);
   });
 });
+
+// ============================================================================
+// Scheduler ticker tests.
+// ============================================================================
+import { Scheduler, type SchedulerRun } from "../src/scheduler/scheduler.js";
+import type { CronJob, CronOutcome, CronRun } from "../src/scheduler/cron-jobs-db.js";
+import { createEventBus } from "../src/ipc/event-bus.js";
+
+interface FakeCronDB {
+  listDue: (now: Date) => CronJob[];
+  markRan: (
+    id: string,
+    outcome: CronOutcome,
+    durationMs: number,
+    summary?: string,
+    runAt?: Date,
+  ) => CronRun;
+  calls: Array<{
+    id: string;
+    outcome: CronOutcome;
+    durationMs: number;
+    summary?: string;
+  }>;
+  due: CronJob[];
+}
+
+function makeJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: `job-${id}`,
+    cron_expr: "* * * * *",
+    task: `task-${id}`,
+    role_hint: null,
+    depth: null,
+    enabled: true,
+    timezone: "America/New_York",
+    last_run: null,
+    next_run: new Date("2026-05-01T12:00:00.000Z").toISOString(),
+    created_by: "user",
+    created_at: new Date("2026-04-01T00:00:00.000Z").toISOString(),
+    ...overrides,
+  };
+}
+
+function makeFakeDB(initialDue: CronJob[] = []): FakeCronDB {
+  const db: FakeCronDB = {
+    due: [...initialDue],
+    calls: [],
+    listDue() {
+      return [...db.due];
+    },
+    markRan(id, outcome, durationMs, summary) {
+      db.calls.push({ id, outcome, durationMs, summary });
+      // Mimic post-run: jobs drop out of the due list once fired.
+      db.due = db.due.filter((j) => j.id !== id);
+      return {
+        id: db.calls.length,
+        job_id: id,
+        run_at: new Date().toISOString(),
+        outcome,
+        duration_ms: durationMs,
+        summary: summary ?? null,
+      };
+    },
+  };
+  return db;
+}
+
+describe("Scheduler", () => {
+  test("dispatches a due job, emits cron_fire once, markRan success", async () => {
+    const db = makeFakeDB([makeJob("j1")]);
+    const bus = createEventBus();
+    const fireEvents: string[] = [];
+    bus.subscribe({ kind: "cron_fire" }, (e) => {
+      fireEvents.push(e.task_id ?? "");
+    });
+
+    const runCalls: string[] = [];
+    const run: SchedulerRun = async (job) => {
+      runCalls.push(job.id);
+    };
+
+    const now = () => new Date("2026-05-01T12:00:05.000Z");
+    const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run, now });
+    sched.tick();
+    // Let the runJob microtask settle so markRan fires.
+    await new Promise<void>((r) => setImmediate(r));
+    await sched.stop();
+
+    assert.deepEqual(fireEvents, ["j1"]);
+    assert.deepEqual(runCalls, ["j1"]);
+    assert.equal(db.calls.length, 1);
+    assert.equal(db.calls[0].id, "j1");
+    assert.equal(db.calls[0].outcome, "success");
+    assert.ok(db.calls[0].durationMs >= 0);
+  });
+
+  test("dedup: slow job does not double-fire on re-tick", async () => {
+    const db = makeFakeDB([makeJob("slow")]);
+    const bus = createEventBus();
+    const fires: string[] = [];
+    bus.subscribe({ kind: "cron_fire" }, (e) => {
+      fires.push(e.task_id ?? "");
+    });
+
+    // Job never resolves within the test.
+    let resolveRun: () => void = () => {};
+    const runPromise = new Promise<void>((r) => {
+      resolveRun = r;
+    });
+    const run: SchedulerRun = () => runPromise;
+
+    const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run });
+
+    // Inject the job back on the due list between ticks — the Scheduler
+    // must still skip because inFlight blocks it.
+    sched.tick();
+    db.due = [makeJob("slow")];
+    sched.tick();
+    sched.tick();
+
+    assert.equal(fires.length, 1, `expected 1 fire, got ${fires.length}`);
+    assert.equal(sched.inFlightCount, 1);
+
+    // Let the job complete so stop() can return cleanly.
+    resolveRun();
+    await sched.stop();
+    assert.equal(db.calls.length, 1);
+  });
+
+  test("stop() is idempotent", async () => {
+    const db = makeFakeDB([]);
+    const bus = createEventBus();
+    const run: SchedulerRun = async () => {};
+    const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run });
+    sched.start(1);
+    await sched.stop();
+    // Second stop must not throw.
+    await sched.stop();
+    assert.equal(sched.inFlightCount, 0);
+  });
+
+  test("stop() awaits in-flight runs", async () => {
+    const db = makeFakeDB([makeJob("long")]);
+    const bus = createEventBus();
+
+    let resolveRun: () => void = () => {};
+    const runStarted = new Promise<void>((runStartResolve) => {
+      const run: SchedulerRun = () => {
+        runStartResolve();
+        return new Promise<void>((r) => {
+          resolveRun = r;
+        });
+      };
+      const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run });
+      sched.tick();
+      // Kick off stop() — it should block until we resolve the run.
+      runStarted.then(async () => {
+        let stopSettled = false;
+        const stopPromise = sched.stop().then(() => {
+          stopSettled = true;
+        });
+        // Give stop() a tick to observe the in-flight map; it must still be pending.
+        await new Promise<void>((r) => setImmediate(r));
+        assert.equal(stopSettled, false, "stop() resolved before in-flight run finished");
+        resolveRun();
+        await stopPromise;
+        assert.equal(stopSettled, true);
+        assert.equal(db.calls.length, 1, "markRan must have been called once");
+      });
+    });
+    await runStarted;
+    // Make sure the awaiting handler finishes before the test ends.
+    await new Promise<void>((r) => setTimeout(r, 50));
+  });
+
+  test("executor rejection surfaces as markRan outcome='fail' with summary", async () => {
+    const db = makeFakeDB([makeJob("bad")]);
+    const bus = createEventBus();
+    const run: SchedulerRun = async () => {
+      throw new Error("boom");
+    };
+
+    const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run });
+    sched.tick();
+    await new Promise<void>((r) => setImmediate(r));
+    await sched.stop();
+
+    assert.equal(db.calls.length, 1);
+    assert.equal(db.calls[0].outcome, "fail");
+    assert.equal(db.calls[0].summary, "boom");
+  });
+
+  test("start() is a no-op when already running", () => {
+    const db = makeFakeDB([]);
+    const bus = createEventBus();
+    const run: SchedulerRun = async () => {};
+    const sched = new Scheduler({ db: db as unknown as import("../src/scheduler/cron-jobs-db.js").CronJobsDB, bus, run });
+    sched.start(60);
+    // Second start must not throw or create a second timer — we just verify no error.
+    sched.start(60);
+    // Clean up. stop() should handle the single timer cleanly.
+    return sched.stop();
+  });
+});
