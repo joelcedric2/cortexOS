@@ -267,6 +267,15 @@ export class CortexController {
     role: AgentRole,
     provider?: AgentProvider,
     slot?: number,
+    /**
+     * Optional working-directory override. When the Orchestrator has a
+     * WorktreeManager wired (Phase 3), it allocates an isolated git
+     * worktree per agent and passes that path here so the tmux pane
+     * starts in the agent's own checkout. Back-compat: when omitted we
+     * fall back to the legacy `.cortexos-agents/<session>` layout under
+     * `config.workingDirectory` so existing callers behave identically.
+     */
+    workingDirectoryOverride?: string,
   ): Promise<number> {
     if (!this.initialized) await this.initialize();
     if (!isValidRole(role)) throw new Error(`Invalid role: ${role}`);
@@ -298,7 +307,9 @@ export class CortexController {
     const learningsContext = this.learningLoop.formatLearningsForContext(pastLearnings);
     const claudeMd = await buildAgentClaudeMd(role, learningsContext || undefined);
 
-    const agentWorkDir = join(this.config.workingDirectory, ".cortexos-agents", sessionName);
+    const agentWorkDir =
+      workingDirectoryOverride ??
+      join(this.config.workingDirectory, ".cortexos-agents", sessionName);
     await mkdir(agentWorkDir, { recursive: true });
     const claudeMdPath = join(agentWorkDir, "CLAUDE.md");
     await writeFile(claudeMdPath, claudeMd, "utf-8");
