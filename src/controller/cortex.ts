@@ -20,6 +20,15 @@ import { createEventBus, type EventBus } from "../ipc/event-bus.js";
 import { openEventsDB, type EventsDB } from "../ipc/events-db.js";
 import { CronJobsDB } from "../scheduler/cron-jobs-db.js";
 import { Scheduler, type SchedulerRun } from "../scheduler/scheduler.js";
+import {
+  cronList,
+  cronCreate,
+  cronUpdate,
+  cronEnable,
+  cronDisable,
+  cronDelete,
+  cronHistory,
+} from "../scheduler/api.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -182,6 +191,34 @@ export class CortexController {
           );
           return { ok: true, data: results };
         }
+        case "cron.list": {
+          return { ok: true, data: cronList(this.ensureCronDb()) };
+        }
+        case "cron.create": {
+          const row = cronCreate(this.ensureCronDb(), req.args);
+          return { ok: true, data: row };
+        }
+        case "cron.update": {
+          const { id, patch } = req.args as { id: unknown; patch: unknown };
+          const row = cronUpdate(this.ensureCronDb(), id, patch);
+          return { ok: true, data: row };
+        }
+        case "cron.enable": {
+          const row = cronEnable(this.ensureCronDb(), req.args.id);
+          return { ok: true, data: row };
+        }
+        case "cron.disable": {
+          const row = cronDisable(this.ensureCronDb(), req.args.id);
+          return { ok: true, data: row };
+        }
+        case "cron.delete": {
+          const out = cronDelete(this.ensureCronDb(), req.args.id);
+          return { ok: true, data: out };
+        }
+        case "cron.history": {
+          const out = cronHistory(this.ensureCronDb(), req.args.id);
+          return { ok: true, data: out };
+        }
         default:
           return { ok: false, error: `Unknown command: ${req.command}` };
       }
@@ -189,6 +226,18 @@ export class CortexController {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
+  }
+
+  /**
+   * Lazily instantiate a `CronJobsDB` if `initialize()` hasn't run yet (or
+   * ran with the `CORTEXOS_SCHEDULER` flag off). Used by the IPC `cron.*`
+   * handlers so the CLI CRUD surface works even when the ticker is gated.
+   */
+  private ensureCronDb(): CronJobsDB {
+    if (!this.cronDb) {
+      this.cronDb = new CronJobsDB();
+    }
+    return this.cronDb;
   }
 
   async spawnAgent(

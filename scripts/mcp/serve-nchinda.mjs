@@ -29,10 +29,11 @@ let toolsInstance = null;
 
 async function getTools() {
   if (toolsInstance) return toolsInstance;
-  const [{ NchindaTools }, { VectorStore }, { Embedder }] = await Promise.all([
+  const [{ NchindaTools }, { VectorStore }, { Embedder }, { CronJobsDB }] = await Promise.all([
     import("../../dist/mcp/nchinda-tools.js"),
     import("../../dist/memory/vector-store.js"),
     import("../../dist/memory/embedder.js"),
+    import("../../dist/scheduler/cron-jobs-db.js"),
   ]);
   const connStr = process.env.DATABASE_URL;
   if (!connStr) {
@@ -42,9 +43,11 @@ async function getTools() {
   await store.initialize();
   const embedder = new Embedder();
   await embedder.initialize();
+  const cronDb = new CronJobsDB();
   toolsInstance = new NchindaTools({
     vectorStore: store,
     embedder,
+    cronDb,
     resolveAgentRole: () => process.env.NCHINDA_AGENT_ROLE,
   });
   return toolsInstance;
@@ -106,6 +109,8 @@ async function handleRequest(msg) {
         result = await tools.recall(args);
       } else if (name === "nchinda_remember") {
         result = await tools.remember(args);
+      } else if (name === "nchinda_schedule") {
+        result = await tools.schedule(args);
       } else {
         return replyError(id, -32601, `unknown tool: ${name}`);
       }
