@@ -162,3 +162,68 @@ describe("docsFetch — input validation", () => {
     await assert.rejects(() => docsFetch("not a url"));
   });
 });
+
+describe("docsFetch — SSRF host deny-list", () => {
+  const makeFetch = () =>
+    async () => new Response("should-not-reach", { status: 200 });
+
+  test("rejects AWS/GCP metadata endpoint by literal IP (169.254.169.254)", async () => {
+    await assert.rejects(
+      () => docsFetch("http://169.254.169.254/latest/meta-data/", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects loopback by literal IP (127.0.0.1)", async () => {
+    await assert.rejects(
+      () => docsFetch("http://127.0.0.1:6379/info", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects RFC1918 10.x literal", async () => {
+    await assert.rejects(
+      () => docsFetch("http://10.0.0.5/", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects RFC1918 192.168.x literal", async () => {
+    await assert.rejects(
+      () => docsFetch("http://192.168.1.1/", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects RFC1918 172.16-31 literal", async () => {
+    await assert.rejects(
+      () => docsFetch("http://172.20.10.1/", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects IPv6 loopback", async () => {
+    await assert.rejects(
+      () => docsFetch("http://[::1]/", { fetchImpl: makeFetch() }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+
+  test("rejects mid-chain redirect to metadata endpoint", async () => {
+    let hop = 0;
+    const fetchImpl: typeof fetch = async () => {
+      hop++;
+      if (hop === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://169.254.169.254/latest/" },
+        });
+      }
+      return new Response("leaked", { status: 200 });
+    };
+    await assert.rejects(
+      () => docsFetch("http://8.8.8.8/r", { fetchImpl }),
+      (err: unknown) => err instanceof DocsFetchError && err.code === "bad-host",
+    );
+  });
+});

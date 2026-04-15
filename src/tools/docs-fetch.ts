@@ -17,12 +17,95 @@
  *     context.
  */
 import { z } from "zod";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 // --------------------------- Constants ------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+const MAX_REDIRECTS = 5;
+
+/**
+ * SSRF deny-list: rejects hosts that resolve to private, local, or
+ * infrastructure IPs. Prevents an LLM-crafted URL from reaching AWS/GCP
+ * metadata endpoints, internal services, or loopback.
+ *
+ * IPv4 ranges blocked:
+ *   0.0.0.0/8          "this network"
+ *   10.0.0.0/8         RFC1918 private
+ *   100.64.0.0/10      CGNAT
+ *   127.0.0.0/8        loopback
+ *   169.254.0.0/16     link-local (AWS/GCP metadata)
+ *   172.16.0.0/12      RFC1918 private
+ *   192.168.0.0/16     RFC1918 private
+ *
+ * IPv6 ranges blocked:
+ *   ::1                loopback
+ *   fc00::/7           ULA (private)
+ *   fe80::/10          link-local
+ */
+function isDisallowedIPv4(ip: string): boolean {
+  const octets = ip.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return true; // malformed → deny
+  }
+  const [a, b] = octets as [number, number, number, number];
+  if (a === 0) return true;
+  if (a === 10) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function isDisallowedIPv6(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
+  // fc00::/7 → first byte 0xfc or 0xfd
+  if (/^fc[0-9a-f]{2}:/.test(lower) || /^fd[0-9a-f]{2}:/.test(lower)) return true;
+  // fe80::/10 → first 10 bits: fe80..febf
+  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true;
+  return false;
+}
+
+async function assertHostAllowed(hostname: string): Promise<void> {
+  // If hostname is already a literal IP, deny-list-check it directly.
+  const literalType = isIP(hostname);
+  if (literalType === 4) {
+    if (isDisallowedIPv4(hostname)) {
+      throw new DocsFetchError(`host ${hostname} is in a private/link-local range (SSRF guard)`, "bad-host");
+    }
+    return;
+  }
+  if (literalType === 6) {
+    if (isDisallowedIPv6(hostname)) {
+      throw new DocsFetchError(`host ${hostname} is in a private/link-local range (SSRF guard)`, "bad-host");
+    }
+    return;
+  }
+  // Hostname: resolve all A/AAAA records and deny if ANY is blocked.
+  const addrs = await lookup(hostname, { all: true }).catch(() => {
+    throw new DocsFetchError(`dns lookup failed for ${hostname}`, "bad-host");
+  });
+  for (const { address, family } of addrs) {
+    if (family === 4 && isDisallowedIPv4(address)) {
+      throw new DocsFetchError(
+        `${hostname} resolves to ${address} in a private/link-local range (SSRF guard)`,
+        "bad-host",
+      );
+    }
+    if (family === 6 && isDisallowedIPv6(address)) {
+      throw new DocsFetchError(
+        `${hostname} resolves to ${address} in a private/link-local range (SSRF guard)`,
+        "bad-host",
+      );
+    }
+  }
+}
 
 // --------------------------- Errors ---------------------------------------
 
@@ -32,12 +115,14 @@ export class DocsFetchError extends Error {
     public readonly code:
       | "bad-url"
       | "bad-protocol"
+      | "bad-host"
       | "timeout"
       | "too-large"
       | "network"
       | "client-error"
       | "server-error"
-      | "parse-error",
+      | "parse-error"
+      | "too-many-redirects",
   ) {
     super(`docs_fetch: ${message}`);
     this.name = "DocsFetchError";
@@ -97,15 +182,52 @@ export async function docsFetch(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  // SSRF defense: manually follow redirects so we can re-validate every hop.
+  // A trusted origin redirecting to 169.254.169.254 would otherwise bypass
+  // the initial host check when redirect: "follow" is used.
+  let currentUrl = parsed.url;
   let response: Response;
+  let hopCount = 0;
   try {
-    response = await fetchImpl(parsed.url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: { "user-agent": userAgent, accept: "text/html,text/plain,*/*" },
-    });
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const hop = new URL(currentUrl);
+      if (!ALLOWED_PROTOCOLS.has(hop.protocol)) {
+        throw new DocsFetchError(
+          `redirect to disallowed protocol '${hop.protocol}'`,
+          "bad-protocol",
+        );
+      }
+      await assertHostAllowed(hop.hostname);
+      const res = await fetchImpl(currentUrl, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: { "user-agent": userAgent, accept: "text/html,text/plain,*/*" },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) {
+          response = res;
+          break;
+        }
+        hopCount++;
+        if (hopCount > MAX_REDIRECTS) {
+          throw new DocsFetchError(
+            `exceeded ${MAX_REDIRECTS} redirects starting from ${parsed.url}`,
+            "too-many-redirects",
+          );
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        // Drain the redirect body so we don't leak the connection.
+        await res.body?.cancel().catch(() => {});
+        continue;
+      }
+      response = res;
+      break;
+    }
   } catch (err) {
     clearTimeout(timer);
+    if (err instanceof DocsFetchError) throw err;
     if (controller.signal.aborted) {
       throw new DocsFetchError(`timed out after ${timeoutMs}ms`, "timeout");
     }
