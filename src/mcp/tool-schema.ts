@@ -103,8 +103,41 @@ export const NCHINDA_REMEMBER_SCHEMA: McpToolSchema = {
   },
 };
 
+
+export const NCHINDA_RESEARCH_SCHEMA: McpToolSchema = {
+  name: "nchinda_research",
+  description:
+    "Inline H→P→R→B research loop (plan §2.3). Generates 3-5 hypotheses, probes each in parallel, updates beliefs, and returns a consolidated Brief with a winning hypothesis + confidence. Use this for quick investigations that don't warrant a full researcher pane.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description: "The question the loop should investigate.",
+        minLength: 1,
+      },
+      depth: {
+        type: "string",
+        enum: ["normal", "deep"],
+        description:
+          "normal = 3 hypotheses × 1 probe × 2min budget; deep = 5 × 2 × 5min. Defaults to normal.",
+      },
+      timeBudgetMs: {
+        type: "integer",
+        description:
+          "Override the overall wall-clock budget in milliseconds. Clamped 1s..10min.",
+        minimum: 1000,
+        maximum: 600000,
+      },
+    },
+    required: ["question"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
   NCHINDA_REMEMBER_SCHEMA,
+  NCHINDA_RESEARCH_SCHEMA,
 ];

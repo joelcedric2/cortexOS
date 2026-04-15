@@ -29,10 +29,16 @@ let toolsInstance = null;
 
 async function getTools() {
   if (toolsInstance) return toolsInstance;
-  const [{ NchindaTools }, { VectorStore }, { Embedder }] = await Promise.all([
+  const [
+    { NchindaTools },
+    { VectorStore },
+    { Embedder },
+    { ResearchTool },
+  ] = await Promise.all([
     import("../../dist/mcp/nchinda-tools.js"),
     import("../../dist/memory/vector-store.js"),
     import("../../dist/memory/embedder.js"),
+    import("../../dist/mcp/research-tool.js"),
   ]);
   const connStr = process.env.DATABASE_URL;
   if (!connStr) {
@@ -42,11 +48,13 @@ async function getTools() {
   await store.initialize();
   const embedder = new Embedder();
   await embedder.initialize();
-  toolsInstance = new NchindaTools({
+  const nchindaTools = new NchindaTools({
     vectorStore: store,
     embedder,
     resolveAgentRole: () => process.env.NCHINDA_AGENT_ROLE,
   });
+  const researchTool = new ResearchTool();
+  toolsInstance = { nchindaTools, researchTool };
   return toolsInstance;
 }
 
@@ -103,9 +111,11 @@ async function handleRequest(msg) {
       const tools = await getTools();
       let result;
       if (name === "nchinda_recall") {
-        result = await tools.recall(args);
+        result = await tools.nchindaTools.recall(args);
       } else if (name === "nchinda_remember") {
-        result = await tools.remember(args);
+        result = await tools.nchindaTools.remember(args);
+      } else if (name === "nchinda_research") {
+        result = await tools.researchTool.research(args);
       } else {
         return replyError(id, -32601, `unknown tool: ${name}`);
       }
