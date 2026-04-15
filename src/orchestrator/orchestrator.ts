@@ -30,6 +30,16 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_DONE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min per agent
 const DEFAULT_DESIGNER_TIMEOUT_MS = 10 * 60 * 1000;
 
+/**
+ * Structured outcome of a single orchestrator attempt. Consumed by the
+ * AutonomyLoop (Phase 2) which wraps executeOnce with fallback logic.
+ */
+export interface OrchestratorResult {
+  success: boolean;
+  taskId: string;
+  error?: string;
+}
+
 export interface OrchestratorDeps {
   /** Override the process-wide registry. Primarily for tests. */
   registry?: AgentRegistry;
@@ -203,6 +213,70 @@ export class Orchestrator {
   /** Exposed for tests and call-sites that already have Plan JSON. */
   parsePlanJson(json: unknown): Plan {
     return parsePlan(json);
+  }
+
+  /**
+   * Single-attempt execution path used by the AutonomyLoop (Phase 2).
+   *
+   * Given a pre-built Plan and task_id, this spawns the Plan's executors,
+   * waits for their `done` events, and returns a structured result instead
+   * of driving the full Designer → executors → consolidation pipeline.
+   *
+   * The Designer is intentionally not involved here — the loop's caller has
+   * already decided on a Plan (either from a cache, a previous attempt, or
+   * a fallback strategy). `execute(task)` remains the production entry point
+   * for the "cold start, run Designer" path.
+   */
+  async executeOnce(plan: Plan, taskId: string): Promise<OrchestratorResult> {
+    if (plan.complexity === "single-shot" || plan.agents.length === 0) {
+      return { success: true, taskId };
+    }
+
+    const executors: SpawnedExecutor[] = [];
+    for (const planAgent of plan.agents) {
+      const executor = await this.spawnExecutor(planAgent, taskId);
+      if (executor) executors.push(executor);
+    }
+
+    if (executors.length === 0) {
+      return { success: false, taskId, error: "plan produced no executable agents" };
+    }
+
+    let anyFailed = false;
+    const failures: string[] = [];
+
+    await Promise.all(
+      executors.map(async (ex) => {
+        try {
+          const event = await this.bus.once(
+            { kind: "done", slot: ex.slot, task_id: taskId },
+            this.doneTimeoutMs,
+          );
+          const payload =
+            typeof event.payload === "object" && event.payload !== null
+              ? (event.payload as { success?: boolean; error?: string })
+              : {};
+          if (payload.success === false) {
+            anyFailed = true;
+            failures.push(`${ex.id}: ${payload.error ?? "reported failure"}`);
+            this.registry.markError(ex.id);
+            return;
+          }
+          this.registry.markDone(ex.id);
+        } catch (err) {
+          anyFailed = true;
+          failures.push(
+            `${ex.id}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          this.registry.markError(ex.id);
+        }
+      }),
+    );
+
+    if (anyFailed) {
+      return { success: false, taskId, error: failures.join("; ") };
+    }
+    return { success: true, taskId };
   }
 
   // ─── Designer / plan ───────────────────────────────────────────────────────
