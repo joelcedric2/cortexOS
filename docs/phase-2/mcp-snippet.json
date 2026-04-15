@@ -1,0 +1,11 @@
+{
+  "_comment": "Paste this fragment into the 'mcpServers' block of .mcp.json at the repo root. Requires `npm run build` first so that dist/ is populated; the server resolves compiled JS, not TS source.",
+  "nchinda": {
+    "command": "node",
+    "args": ["scripts/mcp/serve-nchinda.mjs"],
+    "env": {
+      "DATABASE_URL": "postgres://localhost/cortexos"
+    },
+    "autoStart": false
+  }
+}
