@@ -24,6 +24,8 @@ import {
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { runResearch } from "../research/_research-stub.js";
+import type { BriefStore } from "../research/brief-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +57,18 @@ export interface OrchestratorDeps {
   doneTimeoutMs?: number;
   /** Designer planning timeout in ms. Default 10 minutes. */
   designerTimeoutMs?: number;
+  /**
+   * Persistence layer for research Briefs. Used when a PlanAgent's role is
+   * "researcher" — we run research in-process (no tmux pane) and persist
+   * the resulting Brief so future Designer runs can recall it.
+   */
+  briefStore?: BriefStore;
+  /**
+   * Injectable override for the research function. Defaults to
+   * `runResearch` from `src/research/_research-stub.ts` (to be swapped
+   * for Agent A's real implementation on integration). Tests mock this.
+   */
+  runResearch?: typeof runResearch;
 }
 
 interface SpawnedExecutor {
@@ -63,6 +77,12 @@ interface SpawnedExecutor {
   role: AgentRole;
   planRole: string;
   agent: PlanAgent;
+  /**
+   * Output produced in-process (no tmux). Set by the researcher-role
+   * detour; when present, phase-4 `done` waiting and phase-5 pane capture
+   * are skipped for this executor.
+   */
+  briefOutput?: string;
 }
 
 /**
@@ -90,6 +110,8 @@ export class Orchestrator {
     agentId: string,
     role: AgentRole,
   ) => Promise<void>;
+  private readonly briefStore?: BriefStore;
+  private readonly runResearchFn: typeof runResearch;
 
   constructor(
     private readonly controller: CortexController,
@@ -104,6 +126,8 @@ export class Orchestrator {
     this.captureOverride = deps.capturePaneOutput;
     this.readyOverride = deps.waitForReady;
     this.openTerminalOverride = deps.openTerminal;
+    this.briefStore = deps.briefStore;
+    this.runResearchFn = deps.runResearch ?? runResearch;
   }
 
   /** Primary entry point — drive the end-to-end Phase 1 flow for `task`. */
@@ -140,7 +164,8 @@ export class Orchestrator {
     await this.openTerminal(res0Slot, res0Id, designerRole);
     await this.waitForReady(res0Slot);
 
-    const planningPrompt = this.buildPlanningPrompt(task, taskId);
+    const priorResearch = await this.buildPriorResearchSection(task);
+    const planningPrompt = this.buildPlanningPrompt(task, taskId, priorResearch);
     await this.controller.sendMessage(res0Slot, planningPrompt);
     console.log(
       `[CortexOS] ${res0Id} received task. Analyzing and planning...\n`,
@@ -188,6 +213,14 @@ export class Orchestrator {
 
     const summaries: string[] = [];
     for (const ex of executors) {
+      // Researcher detour: skip pane capture, use the Brief's recommended
+      // action directly (no tmux session existed for this slot).
+      if (ex.briefOutput !== undefined) {
+        summaries.push(
+          `=== ${ex.id} (${ex.planRole}) Results ===\n${ex.briefOutput}`,
+        );
+        continue;
+      }
       const output = await this.capturePaneOutput(ex.slot);
       const lastLines = output
         .split("\n")
@@ -247,6 +280,9 @@ export class Orchestrator {
 
     await Promise.all(
       executors.map(async (ex) => {
+        // Researcher detour already finished in-process; no `done` event
+        // will ever arrive for it. Registry was already transitioned.
+        if (ex.briefOutput !== undefined) return;
         try {
           const event = await this.bus.once(
             { kind: "done", slot: ex.slot, task_id: taskId },
@@ -281,17 +317,51 @@ export class Orchestrator {
 
   // ─── Designer / plan ───────────────────────────────────────────────────────
 
-  private buildPlanningPrompt(task: string, taskId: string): string {
-    return (
+  private buildPlanningPrompt(
+    task: string,
+    taskId: string,
+    priorResearch: string,
+  ): string {
+    const header =
       `You are RES0, the Researcher & System Designer for CortexOS.\n\n` +
       `Task ID: ${taskId}\n` +
-      `Goal: "${task}"\n\n` +
+      `Goal: "${task}"\n\n`;
+    const recallSection = priorResearch ? `${priorResearch}\n\n` : "";
+    return (
+      `${header}${recallSection}` +
       `Analyze the task, then emit a structured execution Plan.\n\n` +
       `${EMIT_PLAN_PROMPT_FRAGMENT}\n\n` +
       `Available example roles (not exhaustive — coin new ones if useful): ` +
       `coder, frontend, backend, tester, e2e-tester, pentester, security, ` +
       `researcher, operator, devops, cicd. The Plan's agents[].role field is free-form text.`
     );
+  }
+
+  /**
+   * Look up prior research Briefs similar to the incoming task and format
+   * them as a "## Relevant prior research" block. Empty string when the
+   * BriefStore is absent or no Briefs clear the 0.5 similarity threshold.
+   */
+  private async buildPriorResearchSection(task: string): Promise<string> {
+    if (!this.briefStore) return "";
+    let matches;
+    try {
+      matches = await this.briefStore.recall(task, 3, 0.5);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CortexOS] Brief recall failed: ${message}`);
+      return "";
+    }
+    if (matches.length === 0) return "";
+    const lines = matches.map(({ brief }) => {
+      const winner = brief.winning ?? "inconclusive";
+      return (
+        `- Q: ${brief.question}\n` +
+        `  Winner: ${winner} (confidence ${brief.confidence})\n` +
+        `  Recommendation: ${brief.recommended_action}`
+      );
+    });
+    return `## Relevant prior research\n\n${lines.join("\n")}`;
   }
 
   /**
@@ -345,6 +415,13 @@ export class Orchestrator {
     planAgent: PlanAgent,
     taskId: string,
   ): Promise<SpawnedExecutor | null> {
+    // Researcher roles don't get a tmux pane — they run research in-process
+    // via `runResearch`, persist the Brief, and return a virtual executor
+    // whose `briefOutput` feeds the Designer's phase-5 consolidation.
+    if (isResearcherRole(planAgent.role)) {
+      return this.runResearcherDetour(planAgent, taskId);
+    }
+
     // Map the open-ended Plan role onto a known AgentRole. If we don't
     // recognize it, fall back to `backend` (the "generic coder" role) so
     // the Designer can still emit new role names (e.g. "ui-ux") without
@@ -386,6 +463,83 @@ export class Orchestrator {
     return { slot, id: agentId, role, planRole: planAgent.role, agent: planAgent };
   }
 
+  /**
+   * Researcher-role detour: no tmux pane, no Claude Code spawn. Runs
+   * `runResearch` in-process, persists the resulting Brief via
+   * `BriefStore` (if wired), and returns a virtual executor whose
+   * `briefOutput` is the Brief's `recommended_action` — the Designer sees
+   * it as this slot's "result" in phase-5 consolidation.
+   */
+  private async runResearcherDetour(
+    planAgent: PlanAgent,
+    taskId: string,
+  ): Promise<SpawnedExecutor | null> {
+    const researcherRole: AgentRole = "ai-ml-researcher";
+    const agentId = nextAgentId(researcherRole);
+
+    // Virtual slot — negative so it cannot collide with a real tmux slot
+    // allocated by SlotManager. Good enough for identity + logging.
+    const slot = -(this.agentIds.size + 1);
+    this.agentIds.set(slot, agentId);
+
+    this.registry.spawn({
+      id: agentId,
+      role: planAgent.role,
+      color: planAgent.color,
+      tmux_session: `inline:researcher:${agentId}`,
+      worktree: planAgent.worktree ?? null,
+      task_id: taskId,
+    });
+    this.registry.markRunning(agentId);
+
+    console.log(
+      `[CortexOS] ${agentId} (researcher) → inline (no tmux) [plan-role="${planAgent.role}"]`,
+    );
+
+    let brief;
+    try {
+      const depth =
+        planAgent.budget?.max_minutes && planAgent.budget.max_minutes > 3
+          ? ("deep" as const)
+          : ("normal" as const);
+      brief = await this.runResearchFn(planAgent.task, {
+        depth,
+        bus: this.bus,
+        task_id: taskId,
+      });
+    } catch (err) {
+      this.registry.markError(agentId);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[CortexOS] ${agentId} research failed: ${message}`);
+      return null;
+    }
+
+    if (this.briefStore) {
+      try {
+        await this.briefStore.persist(brief, {
+          task_id: taskId,
+          agent_role: planAgent.role,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[CortexOS] ${agentId} brief persistence failed: ${message}`,
+        );
+      }
+    }
+
+    this.registry.markDone(agentId);
+
+    return {
+      slot,
+      id: agentId,
+      role: researcherRole,
+      planRole: planAgent.role,
+      agent: planAgent,
+      briefOutput: brief.recommended_action,
+    };
+  }
+
   private buildExecutorPrompt(planAgent: PlanAgent): string {
     const header = planAgent.system_prompt
       ? `${planAgent.system_prompt}\n\n`
@@ -419,6 +573,9 @@ export class Orchestrator {
   ): Promise<void> {
     await Promise.all(
       executors.map(async (ex) => {
+        // Researcher detour already completed in-process — no `done` event
+        // will arrive from a tmux pane that was never created.
+        if (ex.briefOutput !== undefined) return;
         try {
           const event = await this.bus.once(
             { kind: "done", slot: ex.slot, task_id: taskId },
@@ -561,4 +718,14 @@ function inferDonePolicy(_planAgent: PlanAgent): "done" | "standby" {
   // Today: always transition to `done`. Phase 2 will introduce the policy
   // engine that can keep specific roles in standby for follow-up work.
   return "done";
+}
+
+/**
+ * Case-insensitive check for the researcher family of plan roles. Kept
+ * permissive so Designer synonyms like "Researcher" or "ai-ml-researcher"
+ * all take the in-process detour.
+ */
+function isResearcherRole(planRole: string): boolean {
+  const n = planRole.toLowerCase().trim();
+  return n === "researcher" || n === "ai-ml-researcher";
 }
