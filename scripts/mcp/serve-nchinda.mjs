@@ -114,6 +114,19 @@ async function dispatch(name, args, tools) {
     case "nchinda_status":     return tools.coordination.status(args);
     case "nchinda_escalate":   return tools.coordination.escalate(args);
     case "nchinda_ask_peer":   return await tools.coordination.askPeer(args);
+    case "web_search": {
+      const { webSearch } = await import("../../dist/tools/web-search.js");
+      return await webSearch(args?.query ?? "", {
+        limit: args?.limit,
+        timeoutMs: args?.timeoutMs,
+      });
+    }
+    case "tool_discovery": {
+      const { toolDiscovery } = await import("../../dist/tools/tool-discovery.js");
+      return await toolDiscovery(args?.need ?? "", {
+        timeoutMs: args?.timeoutMs,
+      });
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
