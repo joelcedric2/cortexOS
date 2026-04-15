@@ -1,103 +1,142 @@
 #!/usr/bin/env node
 /**
- * Minimal MCP stdio server that exposes nchinda_recall and nchinda_remember.
+ * Minimal MCP stdio server for Nchinda.
  *
- * Speaks JSON-RPC 2.0 framed as newline-delimited JSON on stdin/stdout. Just
- * enough of the MCP protocol to register with Claude Code CLI:
- *   - initialize
- *   - tools/list
- *   - tools/call
- *   - notifications/initialized (ignored)
+ * Speaks JSON-RPC 2.0 framed as newline-delimited JSON on stdin/stdout.
  *
- * Configure in your .mcp.json:
- *   "nchinda": {
- *     "command": "node",
- *     "args": ["scripts/mcp/serve-nchinda.mjs"],
- *     "env": { "DATABASE_URL": "postgres://..." }
- *   }
- *
- * On startup this lazily boots the Embedder + VectorStore. Both are heavy
- * (hf transformers + pg pool) — do not import at module load time; tests
- * and dry-runs should be able to source this file without side effects.
+ * Tools exposed:
+ *   nchinda_recall, nchinda_remember, nchinda_schedule, nchinda_research,
+ *   nchinda_send, nchinda_broadcast, nchinda_status, nchinda_escalate,
+ *   nchinda_ask_peer
  */
 
 import { createInterface } from "node:readline";
 
-// Lazy-loaded so that --dry-run can introspect the tool list without
-// paying the embedder boot cost.
 let toolsInstance = null;
 
 async function getTools() {
   if (toolsInstance) return toolsInstance;
-<<<<<<< HEAD
-  const [{ NchindaTools }, { VectorStore }, { Embedder }, { CronJobsDB }] = await Promise.all([
+  const [
+    { NchindaTools },
+    { ResearchTool },
+    { NchindaCoordination },
+    { VectorStore },
+    { Embedder },
+    { CronJobsDB },
+    { EscalationsDB },
+    { getAgentRegistry },
+    { MessageBus },
+  ] = await Promise.all([
     import("../../dist/mcp/nchinda-tools.js"),
+    import("../../dist/mcp/research-tool.js"),
+    import("../../dist/mcp/nchinda-coordination.js"),
     import("../../dist/memory/vector-store.js"),
     import("../../dist/memory/embedder.js"),
     import("../../dist/scheduler/cron-jobs-db.js"),
-=======
-  const [
-    { NchindaTools },
-    { VectorStore },
-    { Embedder },
-    { ResearchTool },
-  ] = await Promise.all([
-    import("../../dist/mcp/nchinda-tools.js"),
-    import("../../dist/memory/vector-store.js"),
-    import("../../dist/memory/embedder.js"),
-    import("../../dist/mcp/research-tool.js"),
->>>>>>> phase2.5/integration
+    import("../../dist/mcp/escalations-db.js"),
+    import("../../dist/registry/agent-registry.js"),
+    import("../../dist/communication/message-bus.js"),
   ]);
   const connStr = process.env.DATABASE_URL;
-  if (!connStr) {
-    throw new Error("DATABASE_URL env var is required");
-  }
+  if (!connStr) throw new Error("DATABASE_URL env var is required");
+
   const store = new VectorStore(connStr);
   await store.initialize();
   const embedder = new Embedder();
   await embedder.initialize();
-<<<<<<< HEAD
   const cronDb = new CronJobsDB();
-  toolsInstance = new NchindaTools({
-=======
+  const escalationsDb = new EscalationsDB();
+  const registry = getAgentRegistry();
+
   const nchindaTools = new NchindaTools({
->>>>>>> phase2.5/integration
     vectorStore: store,
     embedder,
     cronDb,
     resolveAgentRole: () => process.env.NCHINDA_AGENT_ROLE,
   });
   const researchTool = new ResearchTool();
-  toolsInstance = { nchindaTools, researchTool };
+
+  // Coordination tools: Orchestrator wires the live MessageBus / SlotManager
+  // by assigning globalThis.NCHINDA_RUNTIME before spawning the server.
+  // Absent that, we build a MessageBus with whatever handles are in env.
+  const runtime = globalThis.NCHINDA_RUNTIME ?? {};
+  const messageBus =
+    runtime.messageBus ??
+    new MessageBus(runtime.tmux, runtime.slotManager, store);
+  const slotMap = runtime.slotMap ?? parseSlotMap(process.env.NCHINDA_SLOTS_JSON);
+  const coordination = new NchindaCoordination({
+    messageBus,
+    registry,
+    eventBus: runtime.eventBus,
+    escalationsDb,
+    resolvePeerSlot: (agent) => slotMap.get(agent.id),
+  });
+
+  toolsInstance = { nchindaTools, researchTool, coordination };
   return toolsInstance;
 }
 
+function parseSlotMap(raw) {
+  const map = new Map();
+  if (!raw) return map;
+  try {
+    const obj = JSON.parse(raw);
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "number") map.set(k, v);
+    }
+  } catch {
+    // malformed env var — silently ignore; callers get `no-peer` responses.
+  }
+  return map;
+}
+
 async function getToolSchemas() {
-  const { NCHINDA_TOOL_SCHEMAS } = await import(
-    "../../dist/mcp/tool-schema.js"
-  );
+  const { NCHINDA_TOOL_SCHEMAS } = await import("../../dist/mcp/tool-schema.js");
   return NCHINDA_TOOL_SCHEMAS;
 }
 
-// --------------------------- JSON-RPC plumbing -----------------------------
-
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
-}
-
-function reply(id, result) {
-  send({ jsonrpc: "2.0", id, result });
-}
-
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\n"); }
+function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
 function replyError(id, code, message, data) {
   const err = { code, message };
   if (data !== undefined) err.data = data;
   send({ jsonrpc: "2.0", id, error: err });
 }
 
+async function dispatch(name, args, tools) {
+  switch (name) {
+    case "nchinda_recall":     return await tools.nchindaTools.recall(args);
+    case "nchinda_remember":   return await tools.nchindaTools.remember(args);
+    case "nchinda_schedule":   return await tools.nchindaTools.schedule(args);
+    case "nchinda_research":   return await tools.researchTool.research(args);
+    case "nchinda_send":       return await tools.coordination.send(args);
+    case "nchinda_broadcast":  return await tools.coordination.broadcast(args);
+    case "nchinda_status":     return tools.coordination.status(args);
+    case "nchinda_escalate":   return tools.coordination.escalate(args);
+    case "nchinda_ask_peer":   return await tools.coordination.askPeer(args);
+    case "web_search": {
+      const { webSearch } = await import("../../dist/tools/web-search.js");
+      return await webSearch(args?.query ?? "", {
+        limit: args?.limit,
+        timeoutMs: args?.timeoutMs,
+      });
+    }
+    case "tool_discovery": {
+      const { toolDiscovery } = await import("../../dist/tools/tool-discovery.js");
+      return await toolDiscovery(args?.need ?? "", {
+        timeoutMs: args?.timeoutMs,
+      });
+    }
+    default: {
+      const err = new Error(`unknown tool: ${name}`);
+      err.isUnknownTool = true;
+      throw err;
+    }
+  }
+}
+
 async function handleRequest(msg) {
   const { id, method, params } = msg;
-
   try {
     if (method === "initialize") {
       reply(id, {
@@ -107,44 +146,27 @@ async function handleRequest(msg) {
       });
       return;
     }
-
     if (method === "notifications/initialized" || method === "initialized") {
-      // No response required for notifications; tolerate both spellings.
       if (id !== undefined) reply(id, {});
       return;
     }
-
     if (method === "tools/list") {
-      const schemas = await getToolSchemas();
-      reply(id, { tools: schemas });
+      reply(id, { tools: await getToolSchemas() });
       return;
     }
-
     if (method === "tools/call") {
       const { name, arguments: args } = params ?? {};
       const tools = await getTools();
       let result;
-      if (name === "nchinda_recall") {
-        result = await tools.nchindaTools.recall(args);
-      } else if (name === "nchinda_remember") {
-<<<<<<< HEAD
-        result = await tools.remember(args);
-      } else if (name === "nchinda_schedule") {
-        result = await tools.schedule(args);
-=======
-        result = await tools.nchindaTools.remember(args);
-      } else if (name === "nchinda_research") {
-        result = await tools.researchTool.research(args);
->>>>>>> phase2.5/integration
-      } else {
-        return replyError(id, -32601, `unknown tool: ${name}`);
+      try {
+        result = await dispatch(name, args, tools);
+      } catch (err) {
+        if (err && err.isUnknownTool) return replyError(id, -32601, err.message);
+        throw err;
       }
-      reply(id, {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      });
+      reply(id, { content: [{ type: "text", text: JSON.stringify(result) }] });
       return;
     }
-
     replyError(id, -32601, `method not found: ${method}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -152,22 +174,12 @@ async function handleRequest(msg) {
   }
 }
 
-// --------------------------- Main loop -------------------------------------
-
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
   let msg;
-  try {
-    msg = JSON.parse(trimmed);
-  } catch {
-    // Protocol requires us to ignore malformed frames silently (not hang).
-    return;
-  }
-  if (msg && msg.method) {
-    void handleRequest(msg);
-  }
+  try { msg = JSON.parse(trimmed); } catch { return; }
+  if (msg && msg.method) void handleRequest(msg);
 });
-
 rl.on("close", () => process.exit(0));

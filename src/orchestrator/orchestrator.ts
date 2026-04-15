@@ -26,6 +26,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { runResearch } from "../research/research-loop.js";
 import type { BriefStore } from "../research/brief-store.js";
+import type { WorktreeManager } from "../workspace/worktree-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +70,14 @@ export interface OrchestratorDeps {
    * loop). Tests mock this.
    */
   runResearch?: typeof runResearch;
+  /**
+   * Phase 3 (Nchinda §6): optional git-worktree allocator. When wired,
+   * every spawned executor gets an isolated `agent/<agentId>` branch
+   * checked out at the manager's root dir, and that path becomes the
+   * pane's working directory. When omitted the Orchestrator preserves
+   * the legacy controller-owned `.cortexos-agents/<session>` layout.
+   */
+  worktreeManager?: WorktreeManager;
 }
 
 interface SpawnedExecutor {
@@ -112,6 +121,7 @@ export class Orchestrator {
   ) => Promise<void>;
   private readonly briefStore?: BriefStore;
   private readonly runResearchFn: typeof runResearch;
+  private readonly worktreeManager?: WorktreeManager;
 
   constructor(
     private readonly controller: CortexController,
@@ -128,6 +138,7 @@ export class Orchestrator {
     this.openTerminalOverride = deps.openTerminal;
     this.briefStore = deps.briefStore;
     this.runResearchFn = deps.runResearch ?? runResearch;
+    this.worktreeManager = deps.worktreeManager;
   }
 
   /** Primary entry point — drive the end-to-end Phase 1 flow for `task`. */
@@ -283,6 +294,7 @@ export class Orchestrator {
         // Researcher detour already finished in-process; no `done` event
         // will ever arrive for it. Registry was already transitioned.
         if (ex.briefOutput !== undefined) return;
+        let reachedTerminal = false;
         try {
           const event = await this.bus.once(
             { kind: "done", slot: ex.slot, task_id: taskId },
@@ -296,15 +308,32 @@ export class Orchestrator {
             anyFailed = true;
             failures.push(`${ex.id}: ${payload.error ?? "reported failure"}`);
             this.registry.markError(ex.id);
+            reachedTerminal = true;
             return;
           }
           this.registry.markDone(ex.id);
+          reachedTerminal = true;
         } catch (err) {
           anyFailed = true;
           failures.push(
             `${ex.id}: ${err instanceof Error ? err.message : String(err)}`,
           );
           this.registry.markError(ex.id);
+          reachedTerminal = true;
+        } finally {
+          // Phase 3 teardown: `executeOnce` always drives to a terminal
+          // outcome (no standby heuristic here), so release whenever we
+          // had a manager wired and reached terminal.
+          if (this.worktreeManager && reachedTerminal) {
+            try {
+              await this.worktreeManager.release(ex.id);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.warn(
+                `[CortexOS] Worktree release failed for ${ex.id}: ${message}`,
+              );
+            }
+          }
         }
       }),
     );
@@ -437,7 +466,33 @@ export class Orchestrator {
     const provider: AgentProvider = def.defaultProvider;
 
     const agentId = nextAgentId(role);
-    const slot = await this.controller.spawnAgent(role, provider);
+
+    // Phase 3 (Nchinda §6): allocate a dedicated git worktree BEFORE the
+    // tmux session is created so the pane starts in the agent's own
+    // `agent/<agentId>` branch checkout. If allocation fails we log and
+    // fall back to the controller's legacy `.cortexos-agents` path so a
+    // flaky git doesn't block the whole run.
+    let worktreePath: string | undefined;
+    let worktreeBranch: string | null = planAgent.worktree ?? null;
+    if (this.worktreeManager) {
+      try {
+        const info = await this.worktreeManager.allocate(agentId);
+        worktreePath = info.path;
+        worktreeBranch = info.branch;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[CortexOS] Worktree allocation failed for ${agentId}: ${message}. Falling back to default working dir.`,
+        );
+      }
+    }
+
+    const slot = await this.controller.spawnAgent(
+      role,
+      provider,
+      undefined,
+      worktreePath,
+    );
     this.agentIds.set(slot, agentId);
 
     const sessionName = this.sessionNameForSlot(slot);
@@ -447,7 +502,7 @@ export class Orchestrator {
       role: planAgent.role,
       color: planAgent.color,
       tmux_session: sessionName,
-      worktree: planAgent.worktree ?? null,
+      worktree: worktreeBranch,
       task_id: taskId,
     });
     this.registry.markRunning(agentId);
@@ -576,6 +631,7 @@ export class Orchestrator {
         // Researcher detour already completed in-process — no `done` event
         // will arrive from a tmux pane that was never created.
         if (ex.briefOutput !== undefined) return;
+        let terminal: "done" | "error" | "standby" = "done";
         try {
           const event = await this.bus.once(
             { kind: "done", slot: ex.slot, task_id: taskId },
@@ -590,22 +646,45 @@ export class Orchestrator {
             console.error(
               `[CortexOS] ${ex.id} reported failure on done event.`,
             );
-            return;
-          }
-          const policy =
-            ex.agent.depends_on.length > 0 ? "done" : inferDonePolicy(ex.agent);
-          if (policy === "standby") {
-            this.registry.markStandby(ex.id);
+            terminal = "error";
           } else {
-            this.registry.markDone(ex.id);
+            const policy =
+              ex.agent.depends_on.length > 0
+                ? "done"
+                : inferDonePolicy(ex.agent);
+            if (policy === "standby") {
+              this.registry.markStandby(ex.id);
+              terminal = "standby";
+            } else {
+              this.registry.markDone(ex.id);
+              terminal = "done";
+            }
+            console.log(`[CortexOS] ${ex.id} → ${policy}.`);
           }
-          console.log(`[CortexOS] ${ex.id} → ${policy}.`);
         } catch (err) {
           this.registry.markError(ex.id);
           const message = err instanceof Error ? err.message : String(err);
           console.error(
             `[CortexOS] ${ex.id} did not emit 'done' in time: ${message}`,
           );
+          terminal = "error";
+        }
+        // Phase 3 teardown: release the worktree only on terminal states.
+        // `standby` keeps the working copy live for potential follow-up
+        // work; `done`/`error` let us reclaim disk by removing the
+        // worktree dir + branch.
+        if (
+          this.worktreeManager &&
+          (terminal === "done" || terminal === "error")
+        ) {
+          try {
+            await this.worktreeManager.release(ex.id);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              `[CortexOS] Worktree release failed for ${ex.id}: ${message}`,
+            );
+          }
         }
       }),
     );
