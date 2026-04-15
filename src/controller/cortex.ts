@@ -18,6 +18,8 @@ import { IpcServer, startHooksServer, makeDefaultPersistCompact } from "../ipc/s
 import type { IpcRequest, IpcResponse, HooksServerHandle } from "../ipc/server.js";
 import { createEventBus, type EventBus } from "../ipc/event-bus.js";
 import { openEventsDB, type EventsDB } from "../ipc/events-db.js";
+import { CronJobsDB } from "../scheduler/cron-jobs-db.js";
+import { Scheduler, type SchedulerRun } from "../scheduler/scheduler.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -43,6 +45,15 @@ export class CortexController {
   private ipcServer: IpcServer | null = null;
   private hooksServer: HooksServerHandle | null = null;
   private eventsDb: EventsDB | null = null;
+  private cronDb: CronJobsDB | null = null;
+  private scheduler: Scheduler | null = null;
+  /**
+   * Factory producing the per-job run callback. Injected by the caller so the
+   * controller doesn't have to import `AutonomyLoop` + its deep dep graph
+   * directly. See `docs/phase-1.5/DECISIONS.md` §D-1.5-1. When absent, the
+   * scheduler logs a warning and skips the fire (no-op run).
+   */
+  private schedulerRunFactory: (() => SchedulerRun) | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -53,7 +64,6 @@ export class CortexController {
     this.learningLoop = new LearningLoop(this.vectorStore, this.embedder);
     this.messageBus = new MessageBus(this.tmux, this.slotManager, this.vectorStore);
     this.router = new MessageRouter(this.messageBus, this.slotManager);
-    // Single process-wide EventBus — shared between hooks server and orchestrator.
     this.bus = createEventBus();
 
     this.agents = new Map<AgentProvider, Agent>([
@@ -66,31 +76,24 @@ export class CortexController {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Ensure tmux is installed
     if (!(await checkBinaryExists("tmux"))) {
       throw new Error("tmux is not installed. Install it with: brew install tmux");
     }
 
-    // Initialize vector store and embedder in parallel
     await Promise.all([
       this.vectorStore.initialize(),
       this.embedder.initialize(),
     ]);
 
-    // Clean up orphaned sessions from previous crashes
     const orphans = await this.tmux.listSessions();
     for (const name of orphans) {
       console.log(`[CortexOS] Cleaning up orphaned session: ${name}`);
       await this.tmux.destroySession(name);
     }
 
-    // Start IPC server so CLI subcommands can reach this process
     this.ipcServer = new IpcServer(this.handleIpcRequest.bind(this));
     this.ipcServer.start();
 
-    // Start HTTP hooks server so Claude Code CLI instances can POST Stop/PreCompact events.
-    // Uses the same EventBus instance the orchestrator consumes, so hook emits fan out
-    // to any .once() / .subscribe() callers in the same process.
     try {
       this.eventsDb = await openEventsDB();
       this.hooksServer = await startHooksServer({
@@ -106,13 +109,45 @@ export class CortexController {
       console.warn(`[CortexOS] Hooks server failed to start: ${message}`);
     }
 
+    // Boot scheduler behind a feature flag — see docs/phase-1.5/DECISIONS.md.
+    if (process.env.CORTEXOS_SCHEDULER === "on") {
+      try {
+        this.cronDb = new CronJobsDB();
+        const run: SchedulerRun = this.schedulerRunFactory
+          ? this.schedulerRunFactory()
+          : async (job) => {
+              console.warn(
+                `[CortexOS] Scheduler fired job ${job.id} but no run factory is set — skipping.`,
+              );
+            };
+        this.scheduler = new Scheduler({ db: this.cronDb, bus: this.bus, run });
+        this.scheduler.start();
+        console.log("[CortexOS] Scheduler started");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Scheduler failed to start: ${message}`);
+      }
+    }
+
     this.initialized = true;
     console.log("[CortexOS] Initialized — pgvector connected, embedder loaded");
   }
 
-  /** Process-wide event bus. Inject into Orchestrator so it sees hook events. */
   getBus(): EventBus {
     return this.bus;
+  }
+
+  /** Inject factory producing the scheduler run callback. Call before initialize(). */
+  setSchedulerRunFactory(factory: () => SchedulerRun): void {
+    this.schedulerRunFactory = factory;
+  }
+
+  getCronDb(): CronJobsDB | null {
+    return this.cronDb;
+  }
+
+  getScheduler(): Scheduler | null {
+    return this.scheduler;
   }
 
   async handleIpcRequest(req: IpcRequest): Promise<IpcResponse> {
@@ -168,10 +203,8 @@ export class CortexController {
     const agent = this.agents.get(resolvedProvider);
     if (!agent) throw new Error(`Unknown provider: ${resolvedProvider}`);
 
-    // Allocate a slot (may evict the oldest agent)
     const allocation = this.slotManager.allocateSlot(role, resolvedProvider, slot);
 
-    // If an agent was evicted, persist its learnings and kill its tmux session
     if (allocation.evicted) {
       console.log(
         `[CortexOS] Evicting ${allocation.evictedRole} from slot ${allocation.slotIndex} to make room for ${role}`,
@@ -179,14 +212,13 @@ export class CortexController {
       try {
         await this.killAgent(allocation.slotIndex);
       } catch {
-        // Slot already reset by allocateSlot; best-effort cleanup of handle/tmux
+        // best-effort
       }
     }
 
     const slotIndex = allocation.slotIndex;
     const sessionName = `slot${slotIndex}_${role}`;
 
-    // Build CLAUDE.md with past learnings injected
     const pastLearnings = await this.learningLoop.onTaskStart({
       role,
       taskDescription: `Starting ${role} agent`,
@@ -194,16 +226,13 @@ export class CortexController {
     const learningsContext = this.learningLoop.formatLearningsForContext(pastLearnings);
     const claudeMd = await buildAgentClaudeMd(role, learningsContext || undefined);
 
-    // Create per-agent working directory with role instructions
     const agentWorkDir = join(this.config.workingDirectory, ".cortexos-agents", sessionName);
     await mkdir(agentWorkDir, { recursive: true });
     const claudeMdPath = join(agentWorkDir, "CLAUDE.md");
     await writeFile(claudeMdPath, claudeMd, "utf-8");
 
-    // Create tmux session rooted in the agent's own directory
     await this.tmux.createSession(sessionName, agentWorkDir);
 
-    // Color the pane border by role (Nchinda plan §5.3) — purely cosmetic.
     try {
       await this.tmux.setPaneBorderColor(sessionName, colorForRole(role));
     } catch (err) {
@@ -222,7 +251,6 @@ export class CortexController {
     );
     handle.slot = slotIndex;
 
-    // Track the handle and update slot state
     this.handles.set(slotIndex, handle);
     const slotState = this.slotManager.getSlot(slotIndex);
     if (slotState) slotState.sessionName = sessionName;
@@ -237,7 +265,6 @@ export class CortexController {
     const handle = this.handles.get(slot);
     if (!handle) throw new Error(`No agent in slot ${slot}`);
 
-    // Persist learnings before kill
     if (learning) {
       await this.learningLoop.onTaskComplete({
         agentRole: handle.role,
@@ -248,14 +275,13 @@ export class CortexController {
       });
     }
 
-    // Stop agent and destroy tmux session
     const agent = this.agents.get(handle.provider);
     if (agent) await agent.stop(handle);
 
     try {
       await this.tmux.destroySession(handle.sessionName);
     } catch {
-      // Session may already be gone
+      // best-effort
     }
 
     this.handles.delete(slot);
@@ -295,7 +321,25 @@ export class CortexController {
   async shutdown(): Promise<void> {
     console.log("[CortexOS] Shutting down...");
 
-    // Stop hooks server first (before the bus gets stale references)
+    // Stop scheduler first — awaits in-flight runs.
+    if (this.scheduler) {
+      try {
+        await this.scheduler.stop();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Scheduler stop error: ${message}`);
+      }
+      this.scheduler = null;
+    }
+    if (this.cronDb) {
+      try {
+        this.cronDb.close();
+      } catch {
+        // best-effort
+      }
+      this.cronDb = null;
+    }
+
     if (this.hooksServer) {
       try {
         await this.hooksServer.close();
@@ -314,17 +358,15 @@ export class CortexController {
       this.eventsDb = null;
     }
 
-    // Stop IPC server
     this.ipcServer?.stop();
     this.ipcServer = null;
 
-    // Kill all agents (except slot 0 goes last)
     const slots = [...this.handles.keys()].sort((a, b) => b - a);
     for (const slot of slots) {
       try {
         await this.killAgent(slot);
       } catch {
-        // Best effort cleanup
+        // best-effort
       }
     }
 
