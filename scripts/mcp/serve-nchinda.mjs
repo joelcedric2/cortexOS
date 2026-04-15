@@ -29,11 +29,24 @@ let toolsInstance = null;
 
 async function getTools() {
   if (toolsInstance) return toolsInstance;
+<<<<<<< HEAD
   const [{ NchindaTools }, { VectorStore }, { Embedder }, { CronJobsDB }] = await Promise.all([
     import("../../dist/mcp/nchinda-tools.js"),
     import("../../dist/memory/vector-store.js"),
     import("../../dist/memory/embedder.js"),
     import("../../dist/scheduler/cron-jobs-db.js"),
+=======
+  const [
+    { NchindaTools },
+    { VectorStore },
+    { Embedder },
+    { ResearchTool },
+  ] = await Promise.all([
+    import("../../dist/mcp/nchinda-tools.js"),
+    import("../../dist/memory/vector-store.js"),
+    import("../../dist/memory/embedder.js"),
+    import("../../dist/mcp/research-tool.js"),
+>>>>>>> phase2.5/integration
   ]);
   const connStr = process.env.DATABASE_URL;
   if (!connStr) {
@@ -43,13 +56,19 @@ async function getTools() {
   await store.initialize();
   const embedder = new Embedder();
   await embedder.initialize();
+<<<<<<< HEAD
   const cronDb = new CronJobsDB();
   toolsInstance = new NchindaTools({
+=======
+  const nchindaTools = new NchindaTools({
+>>>>>>> phase2.5/integration
     vectorStore: store,
     embedder,
     cronDb,
     resolveAgentRole: () => process.env.NCHINDA_AGENT_ROLE,
   });
+  const researchTool = new ResearchTool();
+  toolsInstance = { nchindaTools, researchTool };
   return toolsInstance;
 }
 
@@ -106,11 +125,17 @@ async function handleRequest(msg) {
       const tools = await getTools();
       let result;
       if (name === "nchinda_recall") {
-        result = await tools.recall(args);
+        result = await tools.nchindaTools.recall(args);
       } else if (name === "nchinda_remember") {
+<<<<<<< HEAD
         result = await tools.remember(args);
       } else if (name === "nchinda_schedule") {
         result = await tools.schedule(args);
+=======
+        result = await tools.nchindaTools.remember(args);
+      } else if (name === "nchinda_research") {
+        result = await tools.researchTool.research(args);
+>>>>>>> phase2.5/integration
       } else {
         return replyError(id, -32601, `unknown tool: ${name}`);
       }

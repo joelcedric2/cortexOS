@@ -15,6 +15,7 @@ import type { AgentRole } from "../agents/roles.js";
 import type { Agent, AgentProvider, AgentHandle } from "../agents/agent.js";
 import type { MemorySearchResult } from "../memory/vector-store.js";
 import { IpcServer, startHooksServer, makeDefaultPersistCompact } from "../ipc/server.js";
+import { BriefStore } from "../research/brief-store.js";
 import type { IpcRequest, IpcResponse, HooksServerHandle } from "../ipc/server.js";
 import { createEventBus, type EventBus } from "../ipc/event-bus.js";
 import { openEventsDB, type EventsDB } from "../ipc/events-db.js";
@@ -63,6 +64,7 @@ export class CortexController {
    * scheduler logs a warning and skips the fire (no-op run).
    */
   private schedulerRunFactory: (() => SchedulerRun) | null = null;
+  private briefStore: BriefStore | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -94,6 +96,14 @@ export class CortexController {
       this.embedder.initialize(),
     ]);
 
+    // BriefStore depends on both being ready — instantiate now so the
+    // Orchestrator can recall prior research into the Designer's prompt.
+    this.briefStore = new BriefStore({
+      vectorStore: this.vectorStore,
+      embedder: this.embedder,
+    });
+
+    // Clean up orphaned sessions from previous crashes
     const orphans = await this.tmux.listSessions();
     for (const name of orphans) {
       console.log(`[CortexOS] Cleaning up orphaned session: ${name}`);
@@ -157,6 +167,19 @@ export class CortexController {
 
   getScheduler(): Scheduler | null {
     return this.scheduler;
+  }
+
+  /**
+   * BriefStore — persistence + semantic recall for research Briefs. Valid
+   * only after `initialize()` has completed (vectorStore + embedder ready).
+   */
+  getBriefStore(): BriefStore {
+    if (!this.briefStore) {
+      throw new Error(
+        "BriefStore not initialized — call controller.initialize() first",
+      );
+    }
+    return this.briefStore;
   }
 
   async handleIpcRequest(req: IpcRequest): Promise<IpcResponse> {

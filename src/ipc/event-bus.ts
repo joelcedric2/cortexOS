@@ -18,7 +18,10 @@ export type EventKind =
   | "loop_state"
   // Appended by Agent A (Phase 1.5 — Persistent Scheduler). Emitted each
   // time the Scheduler fires a due cron job; payload carries job_id + task.
-  | "cron_fire";
+  | "cron_fire"
+  // Appended by Agent A (Phase 2.5 — Research Agent). Emitted once per
+  // completed H→P→R→B loop with the Brief as payload.
+  | "research_brief_emitted";
 
 export interface AgentEvent {
   kind: EventKind;
