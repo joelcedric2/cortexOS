@@ -169,9 +169,11 @@ export class AutonomyLoop {
       const attemptSucceeded = !attemptError && (outcome?.success ?? false);
       const endedAt = this.now();
 
+      // The observed attempt itself is always state=ATTEMPT on success OR
+      // failure; ADAPT is a separate row written below when a strategy runs.
       const record: AttemptRecord = {
         attempt,
-        state: attemptSucceeded ? "DONE" : "ADAPT",
+        state: attemptSucceeded ? "DONE" : "ATTEMPT",
         error: attemptError?.message ?? (outcome && !outcome.success ? outcome.error : undefined),
         startedAt,
         endedAt,
@@ -210,7 +212,9 @@ export class AutonomyLoop {
 
       // ── ADAPT ───────────────────────────────────────────────────────────
       // Walk the ladder until a strategy handles this failure or we run out.
-      this.emitState("ADAPT", taskId, attempt);
+      // The ADAPT event is emitted once, after walkLadder picks a strategy,
+      // so its payload can include the rung + strategy name. If the ladder
+      // is exhausted, we escalate instead and skip the ADAPT emission.
       const next = await this.walkLadder({
         task: currentTask,
         taskId,
