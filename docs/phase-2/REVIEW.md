@@ -84,7 +84,70 @@ genuinely pluggable — rungs 4-7 will slot in without touching the loop.
 
 ## 4. Security Pass
 
-_TBD._
+### 4.1 Haiku classifier (`src/classifier/haiku-classifier.ts`)
+
+| Check | Result |
+|---|---|
+| API key via env only | ✅ `opts.apiKey ?? process.env.ANTHROPIC_API_KEY` (line 62). Never logged. Never serialized. |
+| No key on disk | ✅ nothing writes to disk in this file. |
+| Response parsing safety (zod) | ✅ `ResultSchema` (lines 29-34) hard-validates `complexity` enum, `confidence` bounds, `rationale` non-empty. |
+| Timeout + abort | ✅ `AbortController` + `setTimeout` (line 93-94). Default 8s ceiling. |
+| Prompt injection via `task` | ⚠️ `task` is interpolated verbatim into the user message (`buildUserPrompt`, line 139). Haiku can be manipulated by adversarial input. Mitigated because `ResultSchema` constrains output — a jailbreak can at worst produce a wrong routing decision, which the loop recovers from. **Acceptable for Phase 2.** Phase 3 should consider escaping or a structured-output tool call. |
+| JSON extraction robustness | ✅ `extractJson()` handles bare JSON + fenced + leading prose. |
+| Fallback leaks error detail | ⚠️ Line 84: `reason: \`[haiku-fallback: ${reason}]\`` — if the API ever 401s with a body containing the key echoed back, this would surface in the `rationale`. Low likelihood but trivial to redact. See §8 patch 3. |
+
+### 4.2 MCP tool handlers (`src/mcp/nchinda-tools.ts`)
+
+| Check | Result |
+|---|---|
+| Input validation via zod | ✅ `RecallInputSchema` + `RememberInputSchema` parse at handler entry. Length bounds on `query` and `content`, enum on `outcome`, int bounds on `k` (1..50). |
+| SQL via prepared statements | ✅ Delegates to `VectorStore` which uses `pg` parameterized queries (verified via import chain — VectorStore is pre-existing Phase 0/1 code, prepared statements only). |
+| No PII in logs | ✅ No `console.*` calls in the handler. Errors propagate to the MCP server layer which converts them to JSON-RPC error frames with just `err.message` — no raw input echoed. |
+| Outcome="recovered" mapping | ✅ Defensively collapsed to `success` at the DB boundary with a `recovered` tag preserved. No schema escape hatch. |
+| `additionalProperties: false` on JSON schemas | ✅ Both tool schemas lock this down — Claude can't smuggle extra keys through the MCP envelope. |
+
+### 4.3 MCP stdio server (`scripts/mcp/serve-nchinda.mjs`)
+
+| Check | Result |
+|---|---|
+| Protocol safety | ✅ Line-delimited JSON via `readline`. Malformed frames silently dropped (line 134). No buffer accumulation, no size bomb surface. |
+| No `eval` / `exec` on tool args | ✅ Tool args routed only through `tools.recall(args)` / `tools.remember(args)` which pass through zod. No dynamic import of arg-derived strings. No `Function` constructor. No `vm` module. |
+| Lazy boot | ✅ Embedder + VectorStore deferred until first `tools/call` (line 30-51). `--dry-run` / tool-list introspection is side-effect-free. |
+| `DATABASE_URL` required early | ✅ Thrown with clear message at `getTools()` first call (line 38-40). Good. |
+| Error surface to client | ⚠️ `replyError(id, -32000, message)` (line 121) passes `err.message` through. If a Postgres error ever contains a connection string, it would leak. **Low risk** (pg driver doesn't normally echo DSN); consider redaction in a future pass. |
+| Shutdown handling | ✅ `rl.on("close") → process.exit(0)`. |
+
+### 4.4 `loop-attempts-db.ts`
+
+| Check | Result |
+|---|---|
+| Prepared statements | ✅ `this.db.prepare(...)` for every `INSERT` and `SELECT` (lines 92-110). Named parameters via `@task_id` etc. |
+| Path traversal on DB file | ⚠️ Default path hardcoded to `~/.cortexos/registry.db`. When `options.dbPath` is user-controlled, `mkdirSync(dirname(dbPath), { recursive: true })` on line 78 will happily create arbitrary parent dirs. **Phase 2 has no user-controlled entrypoint for this**, but if Phase 3 exposes DB-path config via MCP, it needs a `path.resolve()` + allow-listed prefix. Note for Phase 3. |
+| WAL + idempotent migrate | ✅ `journal_mode = WAL` + `CREATE ... IF NOT EXISTS`. |
+| Shared-DB safety | ✅ `owned` flag gates `close()` so Agent B's tables in the same file aren't yanked. |
+
+### 4.5 Policy irreversible-action coverage (§2.2)
+
+The plan enumerates: social DM, email send, payment, `rm -rf`,
+`git push --force`, deploy, delete row. Agent A's table covers all seven
+plus extras (`DROP`, `TRUNCATE`, sudo install, credential write). Spot-
+checked regex behavior:
+
+| Input | Matches? | Correct? |
+|---|---|---|
+| `git push --force` | ✅ | ✅ |
+| `git push origin --force-with-lease` | ✅ | ✅ |
+| `deploy to prod` | ✅ | ✅ |
+| `npm publish` (no "prod") | ❌ | ⚠️ **gap** — plan doesn't list `npm publish` explicitly but it is irreversible. |
+| `please ship to prod` | ❌ | ⚠️ **gap** — informal deploy language slips past. |
+| `force-push to main` (hyphenated) | ❌ | ⚠️ **gap** — only `--force` with leading `--` matches. |
+| `rm -rf ./build` | ✅ | ✅ |
+| `DROP TABLE orders` | ✅ | ✅ |
+
+Gaps are all in the "informal language" direction. For Phase 2 this is
+acceptable — the 3-strike and ladder-exhausted rules catch most residual
+risk — but see §8 patch 1 for a surgical regex tightening worth doing
+before the merge to `main`.
 
 ## 5. Correctness Deep-Dive
 
