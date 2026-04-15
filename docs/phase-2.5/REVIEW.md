@@ -167,20 +167,176 @@ has explicit test. **Status: ✅ match.**
 
 ## 5. Correctness deep-dive
 
-_TBD_
+**Budget propagation → fetch**
+- `runResearch` creates `outer = new AbortController()`; `budgetTimer =
+  setTimeout(() => outer.abort(), timeBudgetMs)`. Each Haiku call
+  creates its own `perCall = new AbortController()` and both the per-
+  call 8s timer AND the outer signal's abort event call
+  `perCall.abort()`. The fetch receives `perCall.signal`. Chain is
+  complete.
+- Verified: the 50ms budget + 5s fetch test completes in <1s. **✅**
+
+**`ProbeExecutor.canRun` tie-breaking**
+- `runResearch` uses `executors.find((ex) => ex.canRun(h.probe)) ??
+  echoExecutor` (line 377). First match wins; echo is the implicit
+  catch-all inside the loop.
+- The separate `runProbe` helper (probe-executors.ts:37) does the
+  same ordering but falls through to `echoExecutor` explicitly at the
+  end. Both paths converge on the same semantics: **no probe ever
+  goes unmatched**. Tested in `probe-executors.test.ts`. **✅**
+
+**Researcher detour + Registry audit trail**
+- Detour builds a virtual negative slot (`slot = -(this.agentIds.size +
+  1)`) so it cannot collide with a real tmux slot. Good.
+- Registry IS updated: `spawn(...)` with `tmux_session:
+  'inline:researcher:${agentId}'` (no real session), then
+  `markRunning` before `runResearch`, `markDone` after, `markError` on
+  failure. Full audit trail preserved. Spawner is NOT called — no tmux
+  pane, no CLI. **✅ matches "no pane, yes registry row" expectation.**
+
+**Brief recall threshold**
+- Hard-coded `0.5` at the call site
+  (`orchestrator.ts:349: briefStore.recall(task, 3, 0.5)`). Not a
+  CortexConfig field, not an env var. Follow-up #3 below suggests
+  threading it through. **⚠️ minor.**
+
+**Stub cleanup (Agent C integration)**
+- Verified: `src/research/_research-stub.ts` no longer exists on
+  `phase2.5/integration` after commit `be04941`. Imports in
+  `brief-store.ts`, `orchestrator.ts`, and the three B tests all now
+  point at `./brief-schema.js` (for `Brief`) and `./research-loop.js`
+  (for `runResearch`). `tsc --noEmit` is clean; `npm test` reports
+  189 passing. **✅ fully resolved.**
+- `tests/brief-store.test.ts::SAMPLE_BRIEF.hypotheses[0]` was rewritten
+  to use A's real `{h, prior, probe, verdict, ...}` shape — so the
+  tests now exercise the actual contract, not a ghost schema. **✅**
+
+**`task_id` forward-wiring**
+- `ResearchOptions.task_id` is accepted (line 73) and passed by the
+  orchestrator detour (line 510), but the loop doesn't thread it into
+  the `plan_emitted` or `research_brief_emitted` event payloads. The
+  field is a no-op today. Not blocking — documented as reserved — but
+  means Mission Control can't yet correlate a Brief back to its task
+  via bus events alone. **⚠️ follow-up.**
 
 ## 6. Test quality
 
-_TBD_
+189 tests total pass; Phase 2.5 adds 18 (Agent B) + 14 (Agent A) = 32.
+
+**Strong points**
+- `runResearch — redaction` test asserts `sk-ant` and internal hostname
+  do NOT appear in the event payload. Real negative assertion.
+- `runResearch — budget enforcement` asserts wall-clock <1s, confirming
+  the AbortController actually propagates rather than just returning a
+  "research-failed" Brief after the timer runs to completion.
+- `probe-executors.test.ts::picks first matching executor in order`
+  uses a `seen: string[]` side-effect to verify the second executor
+  was NOT called — real parallelism/ordering assertion.
+- `designer-recall.test.ts::injects a 'Relevant prior research'
+  section` uses `assert.match(prompt, /## Relevant prior research/)` —
+  verifies the actual injected prompt text, not a mock call log.
+- `researcher-role.test.ts::mixed plan: researcher inline; coder spawns
+  tmux and awaits done` verifies both paths coexist and `spawnCalls`
+  only records the coder.
+
+**Gaps**
+- No test verifies the Haiku **input** prompts — e.g. that the score
+  prompt actually contains `JSON.stringify(result)` for each triple.
+  Tests mock `fetchImpl` to verify the response path, not to pluck the
+  `init.body` and assert content. Easy fix with the existing
+  `scriptedFetch.onCall` callback (already present but unused in most
+  tests).
+- No test for the `executors.find(...) ?? echoExecutor` fallback in
+  `runResearch` itself (it's tested at the standalone `runProbe`
+  layer, but not inside the loop).
+- `researcher-role.test.ts::passes depth=normal when max_minutes <= 3`:
+  the cutoff is "max_minutes > 3" → deep (strict greater). At exactly
+  3 it's normal. Behaviour is tested for 2 (normal) and 5 (deep) but
+  not the boundary 3. Off-by-one edge uncovered.
+- No "passes by accident" cases spotted. Assertions are specific
+  (`assert.equal(brief.winning, "TLS cert expired")`, not just
+  "defined").
 
 ## 7. Design smells
 
-_TBD_
+- **`orchestrator.ts` = 731 LOC.** Exceeds the 500-line rule from
+  `CLAUDE.md`. The researcher-detour method (`runResearcherDetour`,
+  ~85 lines) is a natural extraction point into
+  `src/orchestrator/researcher-executor.ts`. Same for `resolvePlanRole`
+  / `inferDonePolicy` / `isResearcherRole` → a `plan-role-resolver.ts`.
+  **⚠️ blocker for the <500 LOC rule but non-blocking for correctness.**
+- Bounded-context check: `src/research/*` does NOT import
+  `src/orchestrator/*`. Correct direction — orchestrator depends on
+  research, not vice versa. **✅**
+- `src/research/brief-store.ts` depends on `memory/vector-store` +
+  `memory/embedder`; that's a leaf dependency, fine.
+- Dead code: `_typeGate` at the bottom of
+  `tests/research-loop.test.ts` (lines 366-369) is a leftover type
+  anchor. Harmless. Remove during cleanup pass.
+- The `researcher` plan role aliases to `ai-ml-researcher`
+  (`AgentRole`), but the detour uses a fixed `researcherRole: AgentRole
+  = "ai-ml-researcher"` locally. Slight duplication — `resolvePlanRole`
+  already has this mapping.
+- `runResearcherDetour` returns `null` on `runResearch` throw, but
+  `runResearch` is documented as never throwing (fail-safe Brief). The
+  try/catch is defensive but unreachable in practice. Non-blocking.
+- `emit("EXECUTE_PROBES", { count, maxProbes })` emits `maxProbes`
+  which is currently dead (see §3). Keep but comment the intent.
 
 ## 8. Top 3 patches before main-merge
 
-_TBD_
+1. **Split `orchestrator.ts` (731 LOC → <500)**
+   Extract `runResearcherDetour` into
+   `src/orchestrator/researcher-executor.ts`, export it from a namespace
+   the main `Orchestrator` composes. Same shape, less mass. The
+   CLAUDE.md rule is explicit; shipping 731 LOC in a file sets the
+   wrong precedent for Phase 3.
+
+2. **Thread `task_id` into `research_brief_emitted` events**
+   `ResearchOptions.task_id` is accepted but ignored by the loop.
+   Wire it into the two `bus.emit({ kind: 'research_brief_emitted',
+   task_id, payload: ... })` sites (success path line ~442, fail path
+   in `failBrief`). Without this, Mission Control can't correlate a
+   Brief back to the originating task via events alone — the
+   event-sourcing contract §1.6 asked for is half-wired.
+
+3. **Configurable brief-recall threshold + input-verification tests**
+   (a) Move the `0.5` similarity cutoff from the orchestrator call site
+   into `CortexConfig` (or an `OrchestratorDeps.briefRecallThreshold`
+   with a 0.5 default) so the knob is visible without a code change.
+   (b) Add one test per Haiku call that uses `scriptedFetch.onCall` to
+   assert the outbound `init.body` actually contains the hypothesis
+   data (not just that we parsed the response). Closes the
+   "tests only verify outputs" gap in §6.
 
 ## 9. Follow-ups for Phase 3
 
-_TBD_
+- **Real `web_search` probe executor** — swap `webSearchStub` for a
+  Tavily / Brave adapter, or a CDP-driven Google fallback. Interface
+  is stable; drop-in replacement.
+- **Real `shell` probe executor** — sandboxed `child_process.exec`
+  with jailed cwd, tight env (`PATH`, no secrets), no network, and a
+  per-probe timeout. Gate behind a capability flag so researchers must
+  opt in.
+- **Multi-probe-per-hypothesis (§2.3 `deep` = 5 × 2)** — lift
+  `maxProbes` from telemetry to actual dispatch: emit `[probe, verify-
+  probe]` pairs and `Promise.all` them alongside the base probe.
+  Requires extending `HypothesisSeedSchema` to `probes: string[]`.
+- **Research cache** — same question asked twice within N minutes
+  reuses the last Brief (keyed by `normalize(question)`). Drop into
+  `BriefStore` as `recallExact(question, maxAgeMs)`. Saves 3 Haiku
+  calls + wall-clock per repeat.
+- **Per-role research budget** — `budget.max_research_minutes` on
+  `PlanAgent`, enforced by the detour and MCP tool. Currently the loop
+  is bounded per-call; roles aren't.
+- **Prompt-injection fence around recalled briefs** — wrap the
+  `## Relevant prior research` block in an explicit
+  `<prior-research>...</prior-research>` fence with a prompt-level
+  instruction not to treat recalled content as tool-authorization.
+  Cheap belt-and-suspenders once multi-author briefs appear.
+- **Second Haiku pass for DESIGN_PROBES** — if we see Haiku emitting
+  lazy probes (just restating the hypothesis), re-introduce the
+  separate design step. Currently collapsed for cost; watch telemetry.
+- **`task_id` in event payloads (also in top-3 §8)** — Phase-3 must
+  ship this if Mission Control's journal is going to correlate
+  research activity to the autonomy loop's attempts.
