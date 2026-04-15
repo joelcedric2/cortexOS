@@ -43,13 +43,8 @@ export class TmuxManager {
       args.push(command);
     }
     await this.exec(args);
-    await this.exec([
-      "set-option",
-      "-t",
-      sessionName,
-      "history-limit",
-      "10000",
-    ]);
+    await this.exec(["set-option", "-t", sessionName, "history-limit", "10000"]);
+    await this.exec(["set-option", "-t", sessionName, "mouse", "on"]);
   }
 
   /**
