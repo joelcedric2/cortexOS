@@ -8,7 +8,7 @@ import type { TmuxManager } from "../src/tmux/tmux-manager.js";
 import { createEventBus } from "../src/ipc/event-bus.js";
 import { AgentRegistry } from "../src/registry/agent-registry.js";
 import { BriefStore } from "../src/research/brief-store.js";
-import type { Brief } from "../src/research/_research-stub.js";
+import type { Brief } from "../src/research/brief-schema.js";
 import type {
   MemoryRecord,
   MemorySearchResult,

@@ -65,6 +65,12 @@ export interface ResearchOptions {
   probeExecutors?: ReadonlyArray<ProbeExecutor>;
   /** Wall clock, injectable for tests. */
   now?: () => Date;
+  /**
+   * Task id that triggered this research — forwarded so trace events can
+   * be correlated back to the originating task. Ignored by the loop
+   * itself; reserved for future `research_brief_emitted.task_id` wiring.
+   */
+  task_id?: string;
 }
 
 // --------------------------- Defaults --------------------------------------

@@ -24,7 +24,7 @@ import {
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { runResearch } from "../research/_research-stub.js";
+import { runResearch } from "../research/research-loop.js";
 import type { BriefStore } from "../research/brief-store.js";
 
 const execFileAsync = promisify(execFile);
@@ -65,8 +65,8 @@ export interface OrchestratorDeps {
   briefStore?: BriefStore;
   /**
    * Injectable override for the research function. Defaults to
-   * `runResearch` from `src/research/_research-stub.ts` (to be swapped
-   * for Agent A's real implementation on integration). Tests mock this.
+   * `runResearch` from `src/research/research-loop.ts` (the real H→P→R→B
+   * loop). Tests mock this.
    */
   runResearch?: typeof runResearch;
 }

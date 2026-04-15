@@ -1,6 +1,6 @@
 import type { VectorStore, MemorySearchResult } from "../memory/vector-store.js";
 import type { Embedder } from "../memory/embedder.js";
-import type { Brief } from "./_research-stub.js";
+import type { Brief } from "./brief-schema.js";
 
 /**
  * Context attached to a persisted Brief so we can later trace it back to

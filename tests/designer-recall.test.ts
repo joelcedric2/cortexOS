@@ -5,7 +5,7 @@ import type {
   MemoryRecord,
   MemorySearchResult,
 } from "../src/memory/vector-store.js";
-import type { Brief } from "../src/research/_research-stub.js";
+import type { Brief } from "../src/research/brief-schema.js";
 import { Orchestrator } from "../src/orchestrator/orchestrator.js";
 import type { OrchestratorDeps } from "../src/orchestrator/orchestrator.js";
 import type { CortexController } from "../src/controller/cortex.js";

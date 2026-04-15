@@ -5,7 +5,7 @@ import type {
   MemoryRecord,
   MemorySearchResult,
 } from "../src/memory/vector-store.js";
-import type { Brief } from "../src/research/_research-stub.js";
+import type { Brief } from "../src/research/brief-schema.js";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -56,11 +56,12 @@ const SAMPLE_BRIEF: Brief = {
   question: "Should we use JWT or session cookies for auth?",
   hypotheses: [
     {
-      id: "h1",
-      claim: "JWT scales better across services",
-      evidence_for: ["stateless"],
-      evidence_against: ["rotation pain"],
-      confidence: 0.8,
+      h: "JWT scales better across services",
+      prior: 0.6,
+      probe: "benchmark token verification at 10k rps",
+      result: "JWT verification stateless, scales horizontally",
+      posterior: 0.8,
+      verdict: "confirmed",
     },
   ],
   winning: "JWT with refresh tokens",
