@@ -172,6 +172,7 @@ export class NchindaTools {
 
     const now = this.deps.now?.() ?? new Date();
     return { id, stored_at: now.toISOString() };
+  }
 
   /**
    * nchinda_schedule(utterance, autoEnable?, createdBy?) → create a cron job
