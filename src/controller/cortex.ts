@@ -9,13 +9,15 @@ import { MessageRouter } from "../communication/router.js";
 import { ClaudeAgent } from "../agents/claude-agent.js";
 import { GeminiAgent } from "../agents/gemini-agent.js";
 import { CodexAgent } from "../agents/codex-agent.js";
-import { buildAgentClaudeMd } from "../config/roles.js";
+import { buildAgentClaudeMd, colorForRole } from "../config/roles.js";
 import { isValidRole, getRoleDefinition } from "../agents/roles.js";
 import type { AgentRole } from "../agents/roles.js";
 import type { Agent, AgentProvider, AgentHandle } from "../agents/agent.js";
 import type { MemorySearchResult } from "../memory/vector-store.js";
-import { IpcServer } from "../ipc/server.js";
-import type { IpcRequest, IpcResponse } from "../ipc/server.js";
+import { IpcServer, startHooksServer, makeDefaultPersistCompact } from "../ipc/server.js";
+import type { IpcRequest, IpcResponse, HooksServerHandle } from "../ipc/server.js";
+import { createEventBus, type EventBus } from "../ipc/event-bus.js";
+import { openEventsDB, type EventsDB } from "../ipc/events-db.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -37,7 +39,10 @@ export class CortexController {
   private readonly router: MessageRouter;
   private readonly agents: Map<AgentProvider, Agent>;
   private readonly handles: Map<number, AgentHandle> = new Map();
+  private readonly bus: EventBus;
   private ipcServer: IpcServer | null = null;
+  private hooksServer: HooksServerHandle | null = null;
+  private eventsDb: EventsDB | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -48,6 +53,8 @@ export class CortexController {
     this.learningLoop = new LearningLoop(this.vectorStore, this.embedder);
     this.messageBus = new MessageBus(this.tmux, this.slotManager, this.vectorStore);
     this.router = new MessageRouter(this.messageBus, this.slotManager);
+    // Single process-wide EventBus — shared between hooks server and orchestrator.
+    this.bus = createEventBus();
 
     this.agents = new Map<AgentProvider, Agent>([
       ["claude", new ClaudeAgent(this.tmux)],
@@ -81,8 +88,31 @@ export class CortexController {
     this.ipcServer = new IpcServer(this.handleIpcRequest.bind(this));
     this.ipcServer.start();
 
+    // Start HTTP hooks server so Claude Code CLI instances can POST Stop/PreCompact events.
+    // Uses the same EventBus instance the orchestrator consumes, so hook emits fan out
+    // to any .once() / .subscribe() callers in the same process.
+    try {
+      this.eventsDb = await openEventsDB();
+      this.hooksServer = await startHooksServer({
+        bus: this.bus,
+        db: this.eventsDb,
+        persistCompact: makeDefaultPersistCompact({
+          embedder: this.embedder,
+          vectorStore: this.vectorStore,
+        }),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CortexOS] Hooks server failed to start: ${message}`);
+    }
+
     this.initialized = true;
     console.log("[CortexOS] Initialized — pgvector connected, embedder loaded");
+  }
+
+  /** Process-wide event bus. Inject into Orchestrator so it sees hook events. */
+  getBus(): EventBus {
+    return this.bus;
   }
 
   async handleIpcRequest(req: IpcRequest): Promise<IpcResponse> {
@@ -173,6 +203,14 @@ export class CortexController {
     // Create tmux session rooted in the agent's own directory
     await this.tmux.createSession(sessionName, agentWorkDir);
 
+    // Color the pane border by role (Nchinda plan §5.3) — purely cosmetic.
+    try {
+      await this.tmux.setPaneBorderColor(sessionName, colorForRole(role));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CortexOS] Could not set pane border color: ${message}`);
+    }
+
     const handle = await agent.spawn(
       {
         role,
@@ -256,6 +294,25 @@ export class CortexController {
 
   async shutdown(): Promise<void> {
     console.log("[CortexOS] Shutting down...");
+
+    // Stop hooks server first (before the bus gets stale references)
+    if (this.hooksServer) {
+      try {
+        await this.hooksServer.close();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Hooks server close error: ${message}`);
+      }
+      this.hooksServer = null;
+    }
+    if (this.eventsDb) {
+      try {
+        this.eventsDb.close();
+      } catch {
+        // best-effort
+      }
+      this.eventsDb = null;
+    }
 
     // Stop IPC server
     this.ipcServer?.stop();

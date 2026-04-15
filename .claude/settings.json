@@ -87,8 +87,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'exec node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/auto-memory-hook.mjs\" sync'",
-            "timeout": 10000
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/stop.sh\"",
+            "timeout": 3000
           }
         ]
       }
@@ -99,12 +99,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'exec node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/hook-handler.cjs\" compact-manual'"
-          },
-          {
-            "type": "command",
-            "command": "sh -c 'exec node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/hook-handler.cjs\" session-end'",
-            "timeout": 5000
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pre-compact.sh\"",
+            "timeout": 3000
           }
         ]
       },
@@ -113,12 +109,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c 'exec node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/hook-handler.cjs\" compact-auto'"
-          },
-          {
-            "type": "command",
-            "command": "sh -c 'exec node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/hook-handler.cjs\" session-end'",
-            "timeout": 6000
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pre-compact.sh\"",
+            "timeout": 3000
           }
         ]
       }

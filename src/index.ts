@@ -92,7 +92,11 @@ program
 
     const { Orchestrator } = await import("./orchestrator/orchestrator.js");
     const { TmuxManager } = await import("./tmux/tmux-manager.js");
-    const orchestrator = new Orchestrator(cortex, new TmuxManager());
+    // Inject the controller's shared EventBus so the orchestrator sees
+    // Claude Code Stop/PreCompact hook events posted to the HTTP hooks server.
+    const orchestrator = new Orchestrator(cortex, new TmuxManager(), {
+      bus: cortex.getBus(),
+    });
 
     await orchestrator.execute(task);
 

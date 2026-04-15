@@ -1,6 +1,104 @@
 import type { Agent, AgentConfig, AgentHandle } from "./agent.js";
 import type { TmuxManager } from "../tmux/tmux-manager.js";
 import { checkBinaryExists } from "./binary-check.js";
+import {
+  parsePlan,
+  PlanValidationError,
+  EMIT_PLAN_TOOL_INPUT_SCHEMA,
+  type Plan,
+} from "../orchestrator/plan-schema.js";
+
+/**
+ * The `emit_plan` tool contract the Designer (RES0) uses to hand a
+ * structured Plan to the orchestrator. This replaces the old text-scraping
+ * `---ASSIGNMENTS---` format (Nchinda plan §3.2 / §5.3).
+ *
+ * Claude Code CLI does not expose a first-class tool-schema injection from
+ * outside the transcript, so we implement the tool as a textual protocol:
+ * the Designer prints a fenced block of the form
+ *
+ *     <emit_plan>
+ *     { ...plan JSON... }
+ *     </emit_plan>
+ *
+ * `extractEmittedPlan` walks the pane output, pulls the **last** such
+ * block (latest wins — handles a Designer that retries), and validates it
+ * through `parsePlan`. Any malformed output raises a loud
+ * `PlanValidationError` up the stack — we never silently fall back.
+ */
+export const EMIT_PLAN_TOOL = {
+  name: "emit_plan",
+  description:
+    "Emit the final, structured execution Plan for this task. Call exactly " +
+    "once when your analysis is complete. Arguments must conform to the " +
+    "CortexOS Plan schema (see §5.3 of the Nchinda master plan).",
+  input_schema: EMIT_PLAN_TOOL_INPUT_SCHEMA,
+  /** Opening/closing textual fence the Designer wraps the JSON in. */
+  open_tag: "<emit_plan>",
+  close_tag: "</emit_plan>",
+} as const;
+
+const EMIT_PLAN_RE = /<emit_plan>\s*([\s\S]*?)\s*<\/emit_plan>/g;
+
+/**
+ * Scans pane output for `<emit_plan>{...}</emit_plan>` blocks, parses the
+ * last one as JSON, and validates it through `parsePlan`. Throws loudly
+ * if no block is found or the JSON fails validation.
+ */
+export function extractEmittedPlan(output: string): Plan {
+  const matches = [...output.matchAll(EMIT_PLAN_RE)];
+  if (matches.length === 0) {
+    throw new PlanValidationError(
+      "emit_plan: no <emit_plan>...</emit_plan> block found in Designer output",
+      [],
+    );
+  }
+  const raw = matches[matches.length - 1][1].trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new PlanValidationError(
+      `emit_plan: block did not contain valid JSON (${message})`,
+      [],
+    );
+  }
+  return parsePlan(parsed);
+}
+
+/**
+ * System-prompt fragment the orchestrator appends to the Designer's task
+ * so the model knows the exact output contract. Kept next to the tool so
+ * they stay in lockstep.
+ */
+export const EMIT_PLAN_PROMPT_FRAGMENT = `You MUST respond with a single call to the emit_plan tool. Since the runtime exposes this tool as a textual protocol, output it exactly like this (no extra prose after the closing tag):
+
+<emit_plan>
+{
+  "task_id": "<uuid>",
+  "goal": "<1-line human summary>",
+  "complexity": "single-shot" | "multi-agent",
+  "agents": [
+    {
+      "role": "coder" | "tester" | "pentester" | "researcher" | "operator" | ...,
+      "color": "green" | "blue" | "yellow" | "magenta" | "cyan" | "red",
+      "worktree": "feature/xyz",
+      "system_prompt": "optional role-specific prompt",
+      "task": "specific task for this agent",
+      "success_criteria": "how we know this agent is done",
+      "budget": { "max_tokens": 80000, "max_minutes": 15 },
+      "depends_on": []
+    }
+  ],
+  "coordination": {
+    "checkpoints": ["on_step_complete"],
+    "reporting_to": "<agent role that consolidates, e.g. system-designer>"
+  }
+}
+</emit_plan>
+
+Do not emit any other assignment block, table, or free-text plan. Malformed emit_plan output aborts the run.`;
 
 /**
  * Spawns and manages Claude Code CLI instances.

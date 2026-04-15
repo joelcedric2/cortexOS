@@ -153,6 +153,37 @@ export class TmuxManager {
   }
 
   /**
+   * Colors the active pane's border in a session. Used by the controller to
+   * give each agent's pane a role-specific border (Nchinda plan §5.3). `color`
+   * should be one of the standard tmux color names (e.g. "cyan", "blue",
+   * "yellow", "magenta", "red", "green", "white").
+   */
+  async setPaneBorderColor(name: string, color: string): Promise<void> {
+    const sessionTarget = this.prefixed(name);
+    await this.exec([
+      "set-option",
+      "-t",
+      sessionTarget,
+      "pane-active-border-style",
+      `fg=${color}`,
+    ]);
+    await this.exec([
+      "set-option",
+      "-t",
+      sessionTarget,
+      "pane-border-style",
+      `fg=${color}`,
+    ]);
+    await this.exec([
+      "set-option",
+      "-t",
+      sessionTarget,
+      "pane-border-status",
+      "top",
+    ]);
+  }
+
+  /**
    * Captures the pane and returns a SHA-256 hash of its content.
    * Useful for polling-based change detection.
    */

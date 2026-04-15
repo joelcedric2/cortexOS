@@ -1,0 +1,38 @@
+{
+  "_comment": "Phase 1 Agent A — merge these entries into .claude/settings.json under the existing `hooks` key. Append to the existing Stop[0].hooks array and PreCompact[*].hooks arrays; do not replace.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/stop.sh\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pre-compact.sh\"",
+            "timeout": 3000
+          }
+        ]
+      },
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/pre-compact.sh\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}
