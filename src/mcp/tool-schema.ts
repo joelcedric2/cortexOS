@@ -172,10 +172,90 @@ export const NCHINDA_RESEARCH_SCHEMA: McpToolSchema = {
   },
 };
 
+export const NCHINDA_SEND_SCHEMA: McpToolSchema = {
+  name: "nchinda_send",
+  description:
+    "Send a text message from Nchinda (or another slot) to a single agent slot. Thin wrapper over MessageBus.send; targets must be occupied or the call throws.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      to_slot: { type: "integer", minimum: 0, description: "Destination slot index (must be occupied)." },
+      body: { type: "string", minLength: 1, maxLength: 10000, description: "Message body, 1..10000 chars." },
+      from_slot: { type: "integer", minimum: 0, description: "Sender slot. Defaults to -1 (system/nchinda)." },
+    },
+    required: ["to_slot", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const NCHINDA_BROADCAST_SCHEMA: McpToolSchema = {
+  name: "nchinda_broadcast",
+  description:
+    "Broadcast a message to every occupied slot except the sender. Useful for status nudges or coordinated halts.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      body: { type: "string", minLength: 1, maxLength: 10000, description: "Message body, 1..10000 chars." },
+      from_slot: { type: "integer", minimum: 0, description: "Sender slot. Defaults to -1 (system/nchinda)." },
+    },
+    required: ["body"],
+    additionalProperties: false,
+  },
+};
+
+export const NCHINDA_STATUS_SCHEMA: McpToolSchema = {
+  name: "nchinda_status",
+  description:
+    "Registry snapshot: list of agents with id/role/status/task_id/tmux_session/uptime_s plus active_count and standby_count. Read-only.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const NCHINDA_ESCALATE_SCHEMA: McpToolSchema = {
+  name: "nchinda_escalate",
+  description:
+    "Raise a user-facing question. Persists a row in the escalations table AND emits an error-kind event on the bus so live observers learn about it. No voice surfacing in Phase 3.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: { type: "string", minLength: 1, maxLength: 4000, description: "The question to raise." },
+      level: {
+        type: "string",
+        enum: ["info", "question", "blocker", "ask"],
+        description: "Severity. 'ask' is an LLM-ergonomic alias for 'question' and is the default.",
+      },
+      task_id: { type: "string", description: "Associated task id, if any." },
+      agent_id: { type: "string", description: "Agent id that raised this, if any." },
+    },
+    required: ["question"],
+    additionalProperties: false,
+  },
+};
+
+export const NCHINDA_ASK_PEER_SCHEMA: McpToolSchema = {
+  name: "nchinda_ask_peer",
+  description:
+    "Ask a peer agent (by role) a question and await their reply. Returns {ok:true,answer} on success or {ok:false,reason:'no-peer'|'timeout'}. Default timeout 30s.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      role: { type: "string", minLength: 1, maxLength: 64, description: "Target peer role." },
+      question: { type: "string", minLength: 1, maxLength: 4000, description: "The question to ask." },
+      timeout_s: { type: "integer", minimum: 1, maximum: 600, description: "Wait budget in seconds (default 30)." },
+    },
+    required: ["role", "question"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
   NCHINDA_REMEMBER_SCHEMA,
   NCHINDA_SCHEDULE_SCHEMA,
   NCHINDA_RESEARCH_SCHEMA,
+  NCHINDA_SEND_SCHEMA,
+  NCHINDA_BROADCAST_SCHEMA,
+  NCHINDA_STATUS_SCHEMA,
+  NCHINDA_ESCALATE_SCHEMA,
+  NCHINDA_ASK_PEER_SCHEMA,
 ];
