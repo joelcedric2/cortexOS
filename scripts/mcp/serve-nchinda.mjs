@@ -136,6 +136,19 @@ async function handleRequest(msg) {
       } else if (name === "nchinda_research") {
         result = await tools.researchTool.research(args);
 >>>>>>> phase2.5/integration
+      } else if (name === "web_search") {
+        const { webSearch } = await import("../../dist/tools/web-search.js");
+        result = await webSearch(args?.query ?? "", {
+          limit: args?.limit,
+          timeoutMs: args?.timeoutMs,
+        });
+      } else if (name === "tool_discovery") {
+        const { toolDiscovery } = await import(
+          "../../dist/tools/tool-discovery.js"
+        );
+        result = await toolDiscovery(args?.need ?? "", {
+          timeoutMs: args?.timeoutMs,
+        });
       } else {
         return replyError(id, -32601, `unknown tool: ${name}`);
       }
