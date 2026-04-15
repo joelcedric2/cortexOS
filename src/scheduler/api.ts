@@ -33,6 +33,26 @@ const CronExprSchema = z
     message: "not a valid 5-field cron expression",
   });
 
+/**
+ * Frequency guard — parses the minute field and, for non-privileged callers,
+ * rejects anything firing more often than once every 5 minutes. The Scheduler
+ * wraps the Autonomy Loop which can spawn agents, so letting a user post
+ * `* * * * *` via `nchinda_schedule` is a trivial DoS vector.
+ *
+ * Trusted callers (`onboarding`, `nchinda_proactive`) bypass the check so the
+ * existing `meeting_prep` default (every 10 minutes) still seeds cleanly.
+ */
+const HIGH_FREQ_CREATORS: readonly string[] = ["user", "mcp", "api"];
+function rejectsHighFrequency(cron_expr: string, created_by: string): string | null {
+  if (!HIGH_FREQ_CREATORS.includes(created_by)) return null;
+  const minuteField = cron_expr.trim().split(/\s+/)[0] ?? "";
+  // Flag any `*`, `*/1`, `*/2`, `*/3`, `*/4` minute schedules from untrusted callers.
+  if (minuteField === "*" || /^\*\/([1-4])$/.test(minuteField)) {
+    return `minute-resolution schedules (${cron_expr}) require created_by in [onboarding, nchinda_proactive]; got '${created_by}'`;
+  }
+  return null;
+}
+
 export const CronCreateInputSchema = z.object({
   name: z.string().min(1).max(128),
   cron_expr: CronExprSchema,
@@ -46,6 +66,11 @@ export const CronCreateInputSchema = z.object({
   next_run: z.date().optional(),
   /** Optional explicit id — normally auto-generated. */
   id: z.string().min(1).optional(),
+}).superRefine((v, ctx) => {
+  const msg = rejectsHighFrequency(v.cron_expr, v.created_by);
+  if (msg) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg, path: ["cron_expr"] });
+  }
 });
 
 export const CronUpdateInputSchema = z

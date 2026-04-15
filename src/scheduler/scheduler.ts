@@ -17,6 +17,7 @@
  */
 import type { CronJob, CronJobsDB, CronOutcome } from "./cron-jobs-db.js";
 import type { AgentEvent, EventBus } from "../ipc/event-bus.js";
+import { nextRunFromCron } from "./next-run.js";
 
 export type SchedulerRun = (job: CronJob) => Promise<void>;
 
@@ -145,6 +146,23 @@ export class Scheduler {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[Scheduler] markRan failed for ${job.id}: ${message}`);
+    }
+
+    // Recompute next_run. Without this, once listDue picks up a job the `next_run`
+    // never advances and it fires every tick forever (§Phase 1.5 REVIEW Patch 2).
+    try {
+      const next = nextRunFromCron(job.cron_expr, finishedAt);
+      this.db.update(job.id, { next_run: next ?? undefined });
+    } catch (err) {
+      // Malformed cron_expr slipped past validation: disable the job to prevent
+      // a tight loop rather than keep firing it.
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[Scheduler] disabled ${job.id}: bad cron_expr (${message})`);
+      try {
+        this.db.update(job.id, { enabled: false });
+      } catch {
+        // best-effort
+      }
     }
   }
 }
