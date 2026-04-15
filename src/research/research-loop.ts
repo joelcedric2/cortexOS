@@ -298,6 +298,7 @@ export async function runResearch(
   const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const bus = opts.bus;
+  const taskId = opts.task_id;
   const executors = opts.probeExecutors ?? DEFAULT_EXECUTORS;
   const now = opts.now ?? (() => new Date());
   const startedAt = now();
@@ -341,6 +342,7 @@ export async function runResearch(
     if (bus) {
       bus.emit({
         kind: "research_brief_emitted",
+        task_id: taskId,
         payload: {
           question,
           winning: undefined,
@@ -447,6 +449,7 @@ export async function runResearch(
     if (bus) {
       bus.emit({
         kind: "research_brief_emitted",
+        task_id: taskId,
         payload: {
           question,
           winning: brief.winning,
