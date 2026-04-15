@@ -48,7 +48,39 @@ in principle echo back a quoted header — low risk but trivial to fix).
 
 ## 3. Spec Drift Check (§6 Phase 2 DoD)
 
-_TBD._
+Plan §6 Phase 2 requires 5 deliverables. Actual against each:
+
+| Plan item | Status | Evidence |
+|---|---|---|
+| 1. `src/loop/autonomy-loop.ts` — plan/try/adapt/report state machine | ✅ shipped | `src/loop/autonomy-loop.ts` (329 LOC). `execute()` emits `RECALL → PLAN → ATTEMPT → OBSERVE → (REPORT\|ADAPT\|ESCALATE) → DONE` in that order. Each transition fires a `loop_state` EventBus event (verified by test on line 165-191). |
+| 2. Intent classifier (Haiku) at `src/loop/classifier.ts` | ⚠️ relocated | Shipped at `src/classifier/classifier.ts` + `haiku-classifier.ts` + `heuristic-classifier.ts` + `index.ts` (factory). Location differs from plan; bounded-context split is arguably *better* than the plan (DDD). Loop re-exports via `src/loop/types.ts`. **Not a regression.** |
+| 3. Escalation rules engine `src/loop/policy.ts` | ✅ shipped | 177 LOC. `Policy` class with `shouldEscalate` / `isIrreversible` / `withinBudget`. All four §2.2 hard rules wired: 3-strike, irreversible-action, credential-touch, budget-blown. 12-pattern irreversible table. |
+| 4. `nchinda_recall` + `nchinda_remember` MCP tools | ✅ shipped | `src/mcp/nchinda-tools.ts` handlers + `src/mcp/tool-schema.ts` JSON schemas + `scripts/mcp/serve-nchinda.mjs` stdio server. Advertised correctly in `tools/list` RPC. |
+| 5. Wire the loop into the orchestrator as outer shell | ✅ shipped | `Orchestrator.executeOnce(plan, taskId)` added additively (D4). Loop composes it; existing `execute(task)` untouched. Test `tests/orchestrator-execute-once.test.ts` covers the new seam. |
+
+**§2 Autonomy Loop diagram**: Matched 1:1. No silent deviations. The loop
+emits `RECALL → PLAN` even though Phase 2 declares RECALL a no-op (line 107
+of `autonomy-loop.ts`), which is the *correct* way to preserve downstream
+telemetry wiring for Phase 3.
+
+**§2.1 Resourcefulness ladder**: Rungs 1-3 (`retry-same`, `alternate-tool`,
+`reduce-scope`) shipped. Rungs 4-7 deferred per `DECISIONS.md §D1`. The
+interface `FallbackStrategy` takes a `rung` number so the ladder is
+genuinely pluggable — rungs 4-7 will slot in without touching the loop.
+**Genuine tracking, not abandonment.**
+
+**§2.2 Hard escalation rules**:
+- ✅ 3 failed attempts → escalate (`Policy.shouldEscalate` with `strikes >= strikeLimit`)
+- ✅ Irreversible external action → escalate BEFORE attempt (line 135-142 of loop)
+- ✅ Identity/credentials → escalate (`touchesCredentials` checked first in `shouldEscalate`)
+- ✅ Budget blown → escalate (checked both before and during attempt loop)
+
+**Minor drift**:
+- D6 (duplicated classifier types in `src/loop/types.ts`) was correctly
+  collapsed to a re-export on the integration branch. ✅ Merge bug avoided.
+- D3 (EventKind append-only) honored: `loop_state` added at end.
+- The plan calls out `ClassificationResult.confidence` as "collected" —
+  see §5 for whether it's actually *used*.
 
 ## 4. Security Pass
 
