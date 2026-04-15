@@ -18,6 +18,16 @@ import { IpcServer, startHooksServer, makeDefaultPersistCompact } from "../ipc/s
 import type { IpcRequest, IpcResponse, HooksServerHandle } from "../ipc/server.js";
 import { createEventBus, type EventBus } from "../ipc/event-bus.js";
 import { openEventsDB, type EventsDB } from "../ipc/events-db.js";
+import { CronJobsDB } from "../scheduler/_cron-jobs-db-stub.js";
+import {
+  cronList,
+  cronCreate,
+  cronUpdate,
+  cronEnable,
+  cronDisable,
+  cronDelete,
+  cronHistory,
+} from "../scheduler/api.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -43,6 +53,7 @@ export class CortexController {
   private ipcServer: IpcServer | null = null;
   private hooksServer: HooksServerHandle | null = null;
   private eventsDb: EventsDB | null = null;
+  private cronDb: CronJobsDB | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -147,6 +158,34 @@ export class CortexController {
           );
           return { ok: true, data: results };
         }
+        case "cron.list": {
+          return { ok: true, data: cronList(this.getCronDb()) };
+        }
+        case "cron.create": {
+          const row = cronCreate(this.getCronDb(), req.args);
+          return { ok: true, data: row };
+        }
+        case "cron.update": {
+          const { id, patch } = req.args as { id: unknown; patch: unknown };
+          const row = cronUpdate(this.getCronDb(), id, patch);
+          return { ok: true, data: row };
+        }
+        case "cron.enable": {
+          const row = cronEnable(this.getCronDb(), req.args.id);
+          return { ok: true, data: row };
+        }
+        case "cron.disable": {
+          const row = cronDisable(this.getCronDb(), req.args.id);
+          return { ok: true, data: row };
+        }
+        case "cron.delete": {
+          const out = cronDelete(this.getCronDb(), req.args.id);
+          return { ok: true, data: out };
+        }
+        case "cron.history": {
+          const out = cronHistory(this.getCronDb(), req.args.id);
+          return { ok: true, data: out };
+        }
         default:
           return { ok: false, error: `Unknown command: ${req.command}` };
       }
@@ -154,6 +193,19 @@ export class CortexController {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
+  }
+
+  /**
+   * Lazily instantiate a `CronJobsDB` if Agent A's controller wiring has
+   * not already populated `this.cronDb`. Agent A owns the authoritative
+   * bootstrap; this fallback keeps IPC `cron.*` handlers self-sufficient
+   * during partial-wire states.
+   */
+  private getCronDb(): CronJobsDB {
+    if (!this.cronDb) {
+      this.cronDb = new CronJobsDB();
+    }
+    return this.cronDb;
   }
 
   async spawnAgent(
