@@ -7,7 +7,15 @@
  */
 import { EventEmitter } from "node:events";
 
-export type EventKind = "done" | "heartbeat" | "compact" | "error" | "plan_emitted";
+export type EventKind =
+  | "done"
+  | "heartbeat"
+  | "compact"
+  | "error"
+  | "plan_emitted"
+  // Appended by Agent A (Phase 2 — Autonomy Loop). Agent B may append more
+  // kinds at the end; do not re-order.
+  | "loop_state";
 
 export interface AgentEvent {
   kind: EventKind;
