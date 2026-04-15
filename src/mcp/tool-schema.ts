@@ -103,8 +103,47 @@ export const NCHINDA_REMEMBER_SCHEMA: McpToolSchema = {
   },
 };
 
+
+export const NCHINDA_SCHEDULE_SCHEMA: McpToolSchema = {
+  name: "nchinda_schedule",
+  description:
+    "Create a cron job from a natural-language schedule phrase. Parses the utterance (e.g. \"every Friday at 5pm\") into a 5-field cron expression, inserts a disabled job into the scheduler, and optionally enables it. Use this when the user asks Nchinda to recurringly do something on a schedule.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      utterance: {
+        type: "string",
+        description:
+          "The full natural-language schedule + task (e.g. \"every Friday at 5pm: email me the weekly summary\").",
+        minLength: 1,
+      },
+      autoEnable: {
+        type: "boolean",
+        description:
+          "When true, flip the new job to enabled=true immediately. Default false (user opt-in later).",
+        default: false,
+      },
+      createdBy: {
+        type: "string",
+        enum: ["user", "nchinda_proactive"],
+        description:
+          "Who is scheduling. \"user\" when the user asked; \"nchinda_proactive\" when Nchinda is scheduling itself.",
+        default: "user",
+      },
+      timezone: {
+        type: "string",
+        description:
+          "Optional IANA timezone override.",
+      },
+    },
+    required: ["utterance"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
   NCHINDA_REMEMBER_SCHEMA,
+  NCHINDA_SCHEDULE_SCHEMA,
 ];
