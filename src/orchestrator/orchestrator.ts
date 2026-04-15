@@ -164,7 +164,8 @@ export class Orchestrator {
     await this.openTerminal(res0Slot, res0Id, designerRole);
     await this.waitForReady(res0Slot);
 
-    const planningPrompt = this.buildPlanningPrompt(task, taskId);
+    const priorResearch = await this.buildPriorResearchSection(task);
+    const planningPrompt = this.buildPlanningPrompt(task, taskId, priorResearch);
     await this.controller.sendMessage(res0Slot, planningPrompt);
     console.log(
       `[CortexOS] ${res0Id} received task. Analyzing and planning...\n`,
@@ -316,17 +317,51 @@ export class Orchestrator {
 
   // ─── Designer / plan ───────────────────────────────────────────────────────
 
-  private buildPlanningPrompt(task: string, taskId: string): string {
-    return (
+  private buildPlanningPrompt(
+    task: string,
+    taskId: string,
+    priorResearch: string,
+  ): string {
+    const header =
       `You are RES0, the Researcher & System Designer for CortexOS.\n\n` +
       `Task ID: ${taskId}\n` +
-      `Goal: "${task}"\n\n` +
+      `Goal: "${task}"\n\n`;
+    const recallSection = priorResearch ? `${priorResearch}\n\n` : "";
+    return (
+      `${header}${recallSection}` +
       `Analyze the task, then emit a structured execution Plan.\n\n` +
       `${EMIT_PLAN_PROMPT_FRAGMENT}\n\n` +
       `Available example roles (not exhaustive — coin new ones if useful): ` +
       `coder, frontend, backend, tester, e2e-tester, pentester, security, ` +
       `researcher, operator, devops, cicd. The Plan's agents[].role field is free-form text.`
     );
+  }
+
+  /**
+   * Look up prior research Briefs similar to the incoming task and format
+   * them as a "## Relevant prior research" block. Empty string when the
+   * BriefStore is absent or no Briefs clear the 0.5 similarity threshold.
+   */
+  private async buildPriorResearchSection(task: string): Promise<string> {
+    if (!this.briefStore) return "";
+    let matches;
+    try {
+      matches = await this.briefStore.recall(task, 3, 0.5);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CortexOS] Brief recall failed: ${message}`);
+      return "";
+    }
+    if (matches.length === 0) return "";
+    const lines = matches.map(({ brief }) => {
+      const winner = brief.winning ?? "inconclusive";
+      return (
+        `- Q: ${brief.question}\n` +
+        `  Winner: ${winner} (confidence ${brief.confidence})\n` +
+        `  Recommendation: ${brief.recommended_action}`
+      );
+    });
+    return `## Relevant prior research\n\n${lines.join("\n")}`;
   }
 
   /**
