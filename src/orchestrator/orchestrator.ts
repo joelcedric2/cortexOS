@@ -39,6 +39,8 @@ export interface OrchestratorDeps {
   capturePaneOutput?: (slot: number) => Promise<string>;
   /** Hook for waiting until a spawned CLI is at its ❯ prompt. Injectable. */
   waitForReady?: (slot: number) => Promise<void>;
+  /** Hook for opening a user-visible Terminal window attached to a pane. Injectable for tests. */
+  openTerminal?: (slot: number, agentId: string, role: AgentRole) => Promise<void>;
   /** Per-agent `done` timeout in ms. Default 10 minutes. */
   doneTimeoutMs?: number;
   /** Designer planning timeout in ms. Default 10 minutes. */
@@ -73,6 +75,11 @@ export class Orchestrator {
   private readonly designerTimeoutMs: number;
   private readonly captureOverride?: (slot: number) => Promise<string>;
   private readonly readyOverride?: (slot: number) => Promise<void>;
+  private readonly openTerminalOverride?: (
+    slot: number,
+    agentId: string,
+    role: AgentRole,
+  ) => Promise<void>;
 
   constructor(
     private readonly controller: CortexController,
@@ -86,6 +93,7 @@ export class Orchestrator {
       deps.designerTimeoutMs ?? DEFAULT_DESIGNER_TIMEOUT_MS;
     this.captureOverride = deps.capturePaneOutput;
     this.readyOverride = deps.waitForReady;
+    this.openTerminalOverride = deps.openTerminal;
   }
 
   /** Primary entry point — drive the end-to-end Phase 1 flow for `task`. */
@@ -386,6 +394,8 @@ export class Orchestrator {
     agentId: string,
     role: AgentRole,
   ): Promise<void> {
+    if (this.openTerminalOverride) return this.openTerminalOverride(slot, agentId, role);
+
     const sessionName = this.sessionNameForSlot(slot);
     if (!sessionName) return;
 

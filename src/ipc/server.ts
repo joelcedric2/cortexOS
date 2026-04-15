@@ -124,6 +124,7 @@ interface JsonBody {
   ts?: unknown;
   transcript_path?: unknown;
   task_id?: unknown;
+  success?: unknown;
 }
 
 function readJsonBody(req: IncomingMessage, maxBytes = 1_000_000): Promise<JsonBody> {
@@ -206,17 +207,22 @@ export function startHooksServer(deps: HooksServerDeps): Promise<HooksServerHand
         .then((body) => {
           const session_id = asString(body.session_id);
           const agent_id = asString(body.agent_id);
+          const task_id = asString(body.task_id);
           const slot = asNumber(body.slot);
+          const success =
+            typeof body.success === "boolean" ? body.success : undefined;
           const payload = {
             transcript_tail: asString(body.transcript_tail),
             exit_reason: asString(body.exit_reason),
             ts: asString(body.ts),
+            success,
           };
           recordEvent({
             kind: "done",
             slot,
             session_id,
             agent_id,
+            task_id,
             payload,
           });
           bus.emit({
@@ -224,6 +230,7 @@ export function startHooksServer(deps: HooksServerDeps): Promise<HooksServerHand
             slot,
             session_id,
             agent_id,
+            task_id,
             payload,
             ts: now(),
           });
