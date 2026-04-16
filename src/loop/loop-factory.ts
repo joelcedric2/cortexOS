@@ -9,6 +9,10 @@
  * `src/classifier/index.ts` so the loop gets Haiku when `ANTHROPIC_API_KEY`
  * is set and the deterministic heuristic classifier otherwise — matching
  * the plan §2 "classifier-first" routing.
+ *
+ * Ladder wiring: by default we compose rungs 1–3 (pure transforms) plus
+ * any of rungs 4–7 whose dependencies are supplied via `ladderDeps`. When
+ * no `ladderDeps` are passed the loop falls back to the Phase-2 shape.
  */
 import type { Orchestrator } from "../orchestrator/orchestrator.js";
 import type { AgentRegistry } from "../registry/agent-registry.js";
@@ -19,7 +23,10 @@ import { AutonomyLoop } from "./autonomy-loop.js";
 import type { AutonomyLoopDeps } from "./autonomy-loop.js";
 import { Policy } from "./policy.js";
 import { LoopAttemptLog } from "./loop-attempts-db.js";
-import { defaultStrategies } from "./fallback-strategies.js";
+import {
+  defaultLadderStrategies,
+  type LadderDeps,
+} from "./fallback-strategies.js";
 import type { FallbackStrategy, LoopBudget } from "./types.js";
 
 export interface CreateAutonomyLoopOptions {
@@ -33,6 +40,8 @@ export interface CreateAutonomyLoopOptions {
   policy?: Policy;
   attemptsLog?: LoopAttemptLog;
   strategies?: FallbackStrategy[];
+  /** Per-rung deps for ladder rungs 4–7. Unused rungs are skipped. */
+  ladderDeps?: LadderDeps;
   budget?: LoopBudget;
 
   /**
@@ -60,7 +69,8 @@ export function createAutonomyLoop(opts: CreateAutonomyLoopOptions): AutonomyLoo
     opts.classifier ?? createClassifier({ mode: opts.classifierMode ?? "auto" });
 
   const policy = opts.policy ?? new Policy();
-  const strategies = opts.strategies ?? defaultStrategies();
+  const strategies =
+    opts.strategies ?? defaultLadderStrategies(opts.ladderDeps ?? {});
   const attemptsLog =
     opts.attemptsLog ??
     (opts.attemptsDbPath

@@ -175,6 +175,78 @@ export class VectorStore {
     await this.pool.query(`DELETE FROM memories WHERE id = $1`, [id]);
   }
 
+  /**
+   * Paginated listing of memories. Used by the Phase 7 consolidation worker
+   * to stream memories in bounded pages for dedup + canon promotion.
+   *
+   * Ordering is deterministic (created_at ASC, id ASC) so offset paging is
+   * stable across pages. All filters are optional and combine with AND.
+   */
+  async listMemories(opts: {
+    limit: number;
+    offset?: number;
+    agentRole?: string;
+    taskType?: string;
+    outcome?: "success" | "fail";
+    tag?: string;
+    createdAfter?: Date;
+  }): Promise<MemoryRecord[]> {
+    if (!Number.isInteger(opts.limit) || opts.limit <= 0) {
+      throw new Error(
+        `listMemories: limit must be a positive integer, got ${opts.limit}`,
+      );
+    }
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let i = 1;
+    if (opts.agentRole) {
+      conditions.push(`agent_role = $${i++}`);
+      params.push(opts.agentRole);
+    }
+    if (opts.taskType) {
+      conditions.push(`task_type = $${i++}`);
+      params.push(opts.taskType);
+    }
+    if (opts.outcome) {
+      conditions.push(`outcome = $${i++}`);
+      params.push(opts.outcome);
+    }
+    if (opts.tag) {
+      conditions.push(`$${i++} = ANY(tags)`);
+      params.push(opts.tag);
+    }
+    if (opts.createdAfter) {
+      conditions.push(`created_at > $${i++}`);
+      params.push(opts.createdAfter);
+    }
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+    params.push(opts.limit);
+    const limitIdx = i++;
+    params.push(opts.offset ?? 0);
+    const offsetIdx = i++;
+
+    const result = await this.pool.query(
+      `SELECT id, agent_role, task_type, content, embedding, outcome, tags, created_at
+         FROM memories
+         ${whereClause}
+         ORDER BY created_at ASC, id ASC
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    )
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      agentRole: row.agent_role as string,
+      taskType: row.task_type as string,
+      content: row.content as string,
+      embedding: row.embedding as number[],
+      outcome: row.outcome as "success" | "fail",
+      tags: row.tags as string[],
+      createdAt: row.created_at as Date,
+    }))
+  }
+
   async storeMessage(
     fromAgent: string,
     toAgent: string,
