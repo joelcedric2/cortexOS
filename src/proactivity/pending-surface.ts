@@ -5,8 +5,26 @@
  * can take on them. Bridges the ObservationStore with the autonomy loop
  * via the EventBus.
  */
-import type { ObservationStore } from "../sensors/_a-stub.js";
 import type { EventBus } from "../ipc/event-bus.js";
+
+/** Row shape returned by store.pending() — supports both snake_case (real SQLite store) and camelCase (stub). */
+export interface PendingRow {
+  id: number;
+  sensor_name?: string;
+  sensorName?: string;
+  observation: string;
+  urgency: number;
+  sampled_at?: string;
+  sampledAt?: Date;
+}
+
+/** Minimal store contract compatible with both the stub and Agent A's real ObservationStore. */
+export interface PendingSurfaceStore {
+  pending(limit?: number): PendingRow[];
+  markActedOn(id: number): void;
+  suppress(id: number, until: Date): void;
+  suppressByType(sensorName: string, until: Date): void;
+}
 
 export interface PendingSurfaceItem {
   id: number;
@@ -28,9 +46,24 @@ const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const ACTION_SUGGESTIONS: Record<string, string> = {
   "unsent-drafts": "[Reply]",
   "git-dirty": "[Commit]",
+  "unfinished-work": "[Commit]",
   "focus-violation": "[Close App]",
   "app-attention": "[Switch]",
+  "unread-email": "[Reply]",
 };
+
+/** Extract sensor name and sampledAt from either row format. */
+function normalize(row: PendingRow): {
+  sensorName: string;
+  sampledAt: Date;
+} {
+  const sensorName = row.sensor_name ?? row.sensorName ?? "unknown";
+  const sampledAt =
+    row.sampledAt instanceof Date
+      ? row.sampledAt
+      : new Date(row.sampled_at ?? Date.now());
+  return { sensorName, sampledAt };
+}
 
 /**
  * The Pending Surface is the user-facing observation list.
@@ -41,7 +74,7 @@ const ACTION_SUGGESTIONS: Record<string, string> = {
  */
 export class PendingSurface {
   constructor(
-    private readonly store: ObservationStore,
+    private readonly store: PendingSurfaceStore,
     private readonly bus?: EventBus,
   ) {}
 
@@ -50,16 +83,19 @@ export class PendingSurface {
    * @param limit Maximum items to return (default 20).
    */
   list(limit = 20): PendingSurfaceItem[] {
-    const pending = this.store.pending();
-    const sorted = pending.sort((a, b) => b.urgency - a.urgency);
-    return sorted.slice(0, limit).map((obs) => ({
-      id: obs.id,
-      sensorName: obs.sensorName,
-      observation: obs.observation,
-      urgency: obs.urgency,
-      suggestedAction: ACTION_SUGGESTIONS[obs.sensorName],
-      sampledAt: obs.sampledAt,
-    }));
+    const pending = this.store.pending(limit);
+    const sorted = [...pending].sort((a, b) => b.urgency - a.urgency);
+    return sorted.slice(0, limit).map((obs) => {
+      const { sensorName, sampledAt } = normalize(obs);
+      return {
+        id: obs.id,
+        sensorName,
+        observation: obs.observation,
+        urgency: obs.urgency,
+        suggestedAction: ACTION_SUGGESTIONS[sensorName],
+        sampledAt,
+      };
+    });
   }
 
   /**
@@ -83,10 +119,8 @@ export class PendingSurface {
         const items = this.store.pending();
         const item = items.find((o) => o.id === id);
         if (item) {
-          this.store.suppressByType(
-            item.sensorName,
-            new Date(now + ONE_YEAR_MS),
-          );
+          const { sensorName } = normalize(item);
+          this.store.suppressByType(sensorName, new Date(now + ONE_YEAR_MS));
         }
         break;
       }
