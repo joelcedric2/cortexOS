@@ -8,8 +8,27 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { CuTools } from "../src/mcp/cu-tools.js";
+import {
+  CuTools,
+  CuEscalationRequired,
+  type CuEscalationGate,
+} from "../src/mcp/cu-tools.js";
 import type { Actuator, ScreenshotResult, NativeBridge } from "../src/computer-use/actuator.js";
+
+class FakeGate implements CuEscalationGate {
+  public calls: Array<{ q: string; ctx: Record<string, unknown> }> = [];
+  public approve: boolean;
+  constructor(approve: boolean) {
+    this.approve = approve;
+  }
+  async requestConfirmation(
+    q: string,
+    ctx: Record<string, unknown>,
+  ): Promise<boolean> {
+    this.calls.push({ q, ctx });
+    return this.approve;
+  }
+}
 
 // ────────────────────── Fakes ───────────────────────────────────────────
 
@@ -204,5 +223,74 @@ describe("cu_scroll", () => {
     const actuator = new FakeActuator();
     const tools = new CuTools({ actuator });
     await assert.rejects(() => tools.scroll({ x: 1, y: 2, dy: 1.5 }));
+  });
+});
+
+// ────────────────────── Policy gate at the MCP boundary ─────────────────
+
+describe("cu_* policy gate — irreversible actions must escalate", () => {
+  test("cu_type with 'rm -rf /' trips policy, escalates, denies → no actuation", async () => {
+    const actuator = new FakeActuator();
+    const gate = new FakeGate(false);
+    const tools = new CuTools({ actuator, gate });
+    const result = await tools.type({ text: "rm -rf /" });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    assert.equal(gate.calls.length, 1);
+    assert.match(gate.calls[0]!.q, /irreversible/);
+    assert.equal(actuator.calls.length, 0, "actuator NEVER fires on deny");
+  });
+
+  test("cu_type with 'rm -rf /' approved → actuator fires", async () => {
+    const actuator = new FakeActuator();
+    const gate = new FakeGate(true);
+    const tools = new CuTools({ actuator, gate });
+    const result = await tools.type({ text: "rm -rf /" });
+    assert.deepEqual(result, { ok: true, length: 8 });
+    assert.equal(gate.calls.length, 1);
+    assert.equal(actuator.calls.length, 1);
+  });
+
+  test("cu_type with benign text does NOT escalate", async () => {
+    const actuator = new FakeActuator();
+    const gate = new FakeGate(true);
+    const tools = new CuTools({ actuator, gate });
+    await tools.type({ text: "hello world" });
+    assert.equal(gate.calls.length, 0, "benign input skips the gate");
+    assert.equal(actuator.calls.length, 1);
+  });
+
+  test("cu_type with 'git push --force' is gated", async () => {
+    const actuator = new FakeActuator();
+    const gate = new FakeGate(false);
+    const tools = new CuTools({ actuator, gate });
+    const result = await tools.type({ text: "git push --force" });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    assert.equal(actuator.calls.length, 0);
+  });
+
+  test("cu_type flagged irreversible with NO gate wired → throws (fails closed)", async () => {
+    const actuator = new FakeActuator();
+    const tools = new CuTools({ actuator }); // no gate
+    await assert.rejects(
+      () => tools.type({ text: "rm -rf /" }),
+      CuEscalationRequired,
+    );
+    assert.equal(actuator.calls.length, 0, "no bypass allowed");
+  });
+
+  test("cu_screenshot + cu_find_element are read-only and never gate", async () => {
+    const actuator = new FakeActuator();
+    const gate = new FakeGate(false);
+    const tools = new CuTools({ actuator, gate });
+    await tools.screenshot({});
+    const bridge = new FakeAxBridge();
+    bridge.responses.push(JSON.stringify({ match: "none" }));
+    const roTools = new CuTools({
+      actuator: new FakeActuator(),
+      gate,
+      accessibilityDeps: { bridge },
+    });
+    await roTools.findElement({ role: "AXButton" });
+    assert.equal(gate.calls.length, 0, "read-only ops bypass the gate");
   });
 });

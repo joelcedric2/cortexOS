@@ -323,8 +323,28 @@ async function dispatch(name, args, tools) {
     case "cu_scroll": {
       const { CuTools } = await import("../../dist/mcp/cu-tools.js");
       const { createActuator } = await import("../../dist/computer-use/actuator.js");
+      const { Policy } = await import("../../dist/loop/policy.js");
       const actuator = runtime.actuator ?? createActuator({ audit: runtime.audit });
-      const cu = runtime.cuTools ?? new CuTools({ actuator });
+      // Policy gate at the MCP boundary — protects against a
+      // prompt-injected planner bypassing the agent-loop's policy
+      // check by speaking MCP directly.
+      const cuPolicy = runtime.cuPolicy ?? new Policy();
+      const cuGate = runtime.cuEscalationGate ?? {
+        requestConfirmation: async (question) => {
+          await tools.coordination.escalate({
+            question,
+            level: "question",
+          });
+          // Until blocking-confirm is wired, default to approved so
+          // existing agent-loop flows don't regress. Production
+          // wiring MUST inject `runtime.cuEscalationGate` with real
+          // confirm semantics.
+          return true;
+        },
+      };
+      const cu =
+        runtime.cuTools ??
+        new CuTools({ actuator, policy: cuPolicy, gate: cuGate });
       if (name === "cu_click") return await cu.click(args);
       if (name === "cu_type") return await cu.type(args);
       if (name === "cu_screenshot") return await cu.screenshot(args);
