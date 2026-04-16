@@ -39,6 +39,12 @@ import { SpeechToText } from "../voice/stt.js";
 import { TextToSpeech } from "../voice/tts.js";
 import { VoiceWSBridge } from "../voice/ws-bridge.js";
 import { VoiceOrchestrator } from "../voice/voice-orchestrator.js";
+import { EventWSBridge } from "../ui/ws-bridge.js";
+import { UIApiServer } from "../ui/ui-api.js";
+import { AgentRegistry } from "../registry/agent-registry.js";
+import { EscalationsDB } from "../mcp/escalations-db.js";
+import { SkillRegistryDB } from "../skills/skill-registry-db.js";
+import { AuditLog } from "../proactivity/audit.js";
 
 export interface CortexConfig {
   sessionName: string;
@@ -83,6 +89,13 @@ export class CortexController {
    * handler is used as a fallback.
    */
   private voiceRunFactory: ((transcript: string) => Promise<string>) | null = null;
+  // Phase 6 — UI surface. Both start behind CORTEXOS_UI=on.
+  private eventWSBridge: EventWSBridge | null = null;
+  private uiApi: UIApiServer | null = null;
+  private agentRegistry: AgentRegistry | null = null;
+  private escalationsDb: EscalationsDB | null = null;
+  private skillRegistryDb: SkillRegistryDB | null = null;
+  private auditLog: AuditLog | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -208,6 +221,41 @@ export class CortexController {
       }
     }
 
+    // Boot UI surface (event WS bridge + HTTP API) behind CORTEXOS_UI=on.
+    // Created additively here so tests + the CLI don't pay the cost of
+    // opening two more ports unless the dashboard is actually wanted.
+    if (process.env.CORTEXOS_UI === "on") {
+      try {
+        this.agentRegistry = new AgentRegistry();
+        this.escalationsDb = new EscalationsDB();
+        this.skillRegistryDb = new SkillRegistryDB();
+        this.auditLog = new AuditLog();
+
+        this.eventWSBridge = new EventWSBridge({
+          bus: this.bus,
+          registry: this.agentRegistry,
+          briefStore: this.briefStore ?? undefined,
+          escalationsDb: this.escalationsDb,
+        });
+        await this.eventWSBridge.start();
+
+        this.uiApi = new UIApiServer({
+          registry: this.agentRegistry,
+          briefStore: this.briefStore ?? undefined,
+          skillRegistry: this.skillRegistryDb,
+          cronDb: this.cronDb ?? undefined,
+          auditLog: this.auditLog,
+        });
+        await this.uiApi.start();
+        console.log(
+          "[CortexOS] UI surface started (ws://localhost:3101, http://localhost:3103)",
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] UI surface failed to start: ${message}`);
+      }
+    }
+
     this.initialized = true;
     console.log("[CortexOS] Initialized — pgvector connected, embedder loaded");
   }
@@ -257,6 +305,16 @@ export class CortexController {
       );
     }
     return this.briefStore;
+  }
+
+  /** Event WS bridge on port 3101. Null unless CORTEXOS_UI=on on init. */
+  getEventWSBridge(): EventWSBridge | null {
+    return this.eventWSBridge;
+  }
+
+  /** UI HTTP API on port 3103. Null unless CORTEXOS_UI=on on init. */
+  getUIApi(): UIApiServer | null {
+    return this.uiApi;
   }
 
   async handleIpcRequest(req: IpcRequest): Promise<IpcResponse> {
@@ -480,6 +538,53 @@ export class CortexController {
 
   async shutdown(): Promise<void> {
     console.log("[CortexOS] Shutting down...");
+
+    // Stop UI surface first so the two TCP ports (3101 + 3103) free up
+    // before anything downstream blocks. Best-effort — a stuck HTTP close
+    // must not prevent the rest of shutdown from running.
+    if (this.uiApi) {
+      try {
+        await this.uiApi.stop();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] UI API stop error: ${message}`);
+      }
+      this.uiApi = null;
+    }
+    if (this.eventWSBridge) {
+      try {
+        await this.eventWSBridge.stop();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Event WS bridge stop error: ${message}`);
+      }
+      this.eventWSBridge = null;
+    }
+    if (this.skillRegistryDb) {
+      try {
+        this.skillRegistryDb.close();
+      } catch {
+        // best-effort
+      }
+      this.skillRegistryDb = null;
+    }
+    if (this.escalationsDb) {
+      try {
+        this.escalationsDb.close();
+      } catch {
+        // best-effort
+      }
+      this.escalationsDb = null;
+    }
+    if (this.agentRegistry) {
+      try {
+        this.agentRegistry.close();
+      } catch {
+        // best-effort
+      }
+      this.agentRegistry = null;
+    }
+    this.auditLog = null;
 
     // Stop voice subsystem before anything else so the WS bridge
     // releases its TCP port promptly.
