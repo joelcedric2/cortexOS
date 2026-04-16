@@ -23,6 +23,7 @@
 import { z } from "zod";
 import type { ScreenFrame } from "./screen-capture.js";
 import { ocrImage, type OcrResult } from "./ocr.js";
+import type { AuditLog } from "../proactivity/audit.js";
 
 // --------------------------- Types ----------------------------------------
 
@@ -57,6 +58,13 @@ export interface VisionBriefOptions {
   apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Phase 8.5 — optional audit sink. When provided AND the LLM path fires,
+   * one NDJSON line is appended:
+   *   {action: 'vision_llm', detail: 'model=haiku outcome=<ok|error>', ts}
+   * No-op when omitted, keeping callers that don't care opt-out.
+   */
+  audit?: AuditLog;
 }
 
 export interface VisionBriefDeps {
@@ -226,6 +234,7 @@ export async function buildBrief(
       fetchImpl,
       timeoutMs,
     );
+    appendVisionLlmAudit(opts.audit, "ok");
     return {
       ...local,
       summary: polished.summary,
@@ -233,10 +242,35 @@ export async function buildBrief(
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    appendVisionLlmAudit(opts.audit, "error", redactReason(reason));
     return {
       ...local,
       summary: `${local.summary} [llm-fallback: ${redactReason(reason)}]`,
     };
+  }
+}
+
+/**
+ * Append a single audit line for a vision-brief LLM call. No-op when no
+ * AuditLog is wired. Never throws — audit is best-effort.
+ */
+function appendVisionLlmAudit(
+  audit: AuditLog | undefined,
+  outcome: "ok" | "error",
+  errorLabel?: string,
+): void {
+  if (!audit) return;
+  try {
+    const parts = [`model=haiku`, `outcome=${outcome}`];
+    if (errorLabel) parts.push(`reason=${errorLabel}`);
+    audit.append({
+      action: "vision_llm",
+      detail: parts.join(" "),
+      ts: new Date(),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[vision-brief] audit append failed: ${msg}`);
   }
 }
 
