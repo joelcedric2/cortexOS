@@ -124,6 +124,12 @@ async function dispatch(name, args, tools) {
       const capturer = runtime.screenCapturer ?? new ScreenCapturer();
       return await nchindaSee(args ?? {}, { capturer, brief: buildBrief });
     }
+    case "nchinda_look": {
+      const { nchindaLook } = await import("../../dist/mcp/nchinda-look.js");
+      // Phase 9 — strictly on-demand. No runtime-shared camera; each
+      // call opens the AVFoundation session once and closes it.
+      return await nchindaLook(args ?? {}, {});
+    }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
       return await webSearch(args?.query ?? "", {

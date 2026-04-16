@@ -681,6 +681,31 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   },
 };
 
+export const NCHINDA_LOOK_SCHEMA: McpToolSchema = {
+  name: "nchinda_look",
+  description:
+    "Capture ONE frame from the physical camera (front / back / continuity) and return a short description of what the camera sees, plus any OCR'd text. Optionally answer a user question about the frame using Claude Sonnet vision. Strictly one-shot — no loop. Falls back to a local-only reply when the LLM is unavailable.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description:
+          "Optional user question about the frame (e.g. \"what am I looking at?\"). Max 2000 chars.",
+        minLength: 1,
+        maxLength: 2000,
+      },
+      device: {
+        type: "string",
+        enum: ["front", "back", "continuity"],
+        description:
+          "Physical camera to use. `continuity` is iPhone-as-webcam via Continuity Camera. Defaults to `front`.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -693,6 +718,7 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_ESCALATE_SCHEMA,
   NCHINDA_ASK_PEER_SCHEMA,
   NCHINDA_SEE_SCHEMA,
+  NCHINDA_LOOK_SCHEMA,
   WEB_SEARCH_SCHEMA,
   TOOL_DISCOVERY_SCHEMA,
   SKILL_DISCOVER_SCHEMA,
