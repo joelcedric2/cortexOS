@@ -681,6 +681,79 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   },
 };
 
+// ────────────────────────── Computer-use Tools (Phase 10) ────────────────
+
+export const CU_CLICK_SCHEMA: McpToolSchema = {
+  name: "cu_click",
+  description:
+    "Click the mouse at absolute screen (x, y). Bounds are 0..10000 on both axes. Default button is 'left'. Shells through the Swift `cortexos-vision input click` helper. Audit: one `cu_action` NDJSON line per call when an AuditLog is wired.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      x: { type: "integer", minimum: 0, maximum: 10000, description: "Absolute screen x in points." },
+      y: { type: "integer", minimum: 0, maximum: 10000, description: "Absolute screen y in points." },
+      button: { type: "string", enum: ["left", "right"], description: "Mouse button (default left)." },
+    },
+    required: ["x", "y"],
+    additionalProperties: false,
+  },
+};
+
+export const CU_TYPE_SCHEMA: McpToolSchema = {
+  name: "cu_type",
+  description:
+    "Synthesize keyboard input. Capped at 10000 characters per call to prevent runaway LLM output. Optional per-char delay 0..5000 ms. Does NOT check for irreversibility — wrap with agent-loop's policy gate when typing into send/compose fields.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: { type: "string", minLength: 1, maxLength: 10000, description: "Unicode text to type." },
+      delayMs: { type: "integer", minimum: 0, maximum: 5000, description: "Per-character delay in ms." },
+    },
+    required: ["text"],
+    additionalProperties: false,
+  },
+};
+
+export const CU_SCREENSHOT_SCHEMA: McpToolSchema = {
+  name: "cu_screenshot",
+  description:
+    "Take one fresh screenshot via the Swift `cortexos-vision input screenshot` helper. Returns `{path, width, height}`. The PNG is written to the default tmp path; callers may pair with `nchinda_see` for a structured brief.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const CU_FIND_ELEMENT_SCHEMA: McpToolSchema = {
+  name: "cu_find_element",
+  description:
+    "AX query over running applications. Returns the first `{role, label, bbox, pid}` match or null. `role` is required (e.g. 'AXButton'); `label` and `app` (bundle id) narrow the walk.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      role: { type: "string", minLength: 1, description: "AX role (e.g. 'AXButton')." },
+      label: { type: "string", minLength: 1, description: "Case-insensitive label substring." },
+      app: { type: "string", minLength: 1, description: "Bundle id to scope the search." },
+    },
+    required: ["role"],
+    additionalProperties: false,
+  },
+};
+
+export const CU_SCROLL_SCHEMA: McpToolSchema = {
+  name: "cu_scroll",
+  description:
+    "Scroll at absolute (x, y) by `dy` pixels (negative = down). Optional `dx` for horizontal scroll. Moves the cursor first so the scroll lands on the intended element.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      x: { type: "integer", minimum: 0, maximum: 10000 },
+      y: { type: "integer", minimum: 0, maximum: 10000 },
+      dy: { type: "integer", description: "Vertical scroll amount in pixels (negative = down)." },
+      dx: { type: "integer", description: "Horizontal scroll amount in pixels (default 0)." },
+    },
+    required: ["x", "y", "dy"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -712,4 +785,9 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   WM_FOCUS_SCHEMA,
   WM_SPACE_SWITCH_SCHEMA,
   WM_LIST_WINDOWS_SCHEMA,
+  CU_CLICK_SCHEMA,
+  CU_TYPE_SCHEMA,
+  CU_SCREENSHOT_SCHEMA,
+  CU_FIND_ELEMENT_SCHEMA,
+  CU_SCROLL_SCHEMA,
 ];
