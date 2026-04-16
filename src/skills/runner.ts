@@ -10,8 +10,10 @@
  * falls back to plain `runShell` with a console.warn.
  */
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { ShellResult } from "../tools/shell.js";
 import type { SkillRegistryDB } from "./skill-registry-db.js";
+import type { SkillUsageLedger } from "./usage-ledger.js";
 
 // ----------------------------- Constants ------------------------------------
 
@@ -61,6 +63,8 @@ export interface RunSkillDeps {
   platform?: NodeJS.Platform;
   /** Wall clock, injectable for tests. */
   now?: () => number;
+  /** Optional usage ledger for telemetry. */
+  ledger?: SkillUsageLedger;
 }
 
 // ----------------------------- Errors ---------------------------------------
@@ -250,7 +254,24 @@ export async function runSkill(
   const stderrT = truncate(result.stderr, STDERR_CAP);
 
   // 6. Record run outcome
-  deps.registry.recordRun(parsed.slug, result.exitCode === 0 ? "success" : "fail");
+  const outcome = result.exitCode === 0 ? "success" : "fail";
+  deps.registry.recordRun(parsed.slug, outcome);
+
+  // 7. Write to usage ledger if wired
+  if (deps.ledger) {
+    const inputHash = createHash("sha256")
+      .update(JSON.stringify({ slug: parsed.slug, args: parsed.args }))
+      .digest("hex")
+      .slice(0, 16);
+    deps.ledger.record({
+      skill_name: parsed.slug,
+      input_hash: inputHash,
+      outcome: outcome as "success" | "fail",
+      latency_ms: durationMs,
+      output_summary: stdoutT.text.slice(0, 200) || undefined,
+      error_msg: result.exitCode !== 0 ? stderrT.text.slice(0, 500) || undefined : undefined,
+    });
+  }
 
   return {
     slug: parsed.slug,
