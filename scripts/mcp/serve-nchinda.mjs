@@ -150,6 +150,19 @@ async function dispatch(name, args, tools) {
       if (name === "social_send") return await st.send(args);
       return st.post(args);
     }
+    case "wm_move_window":
+    case "wm_tile":
+    case "wm_focus":
+    case "wm_space_switch":
+    case "wm_list_windows": {
+      const { WmTools } = await import("../../dist/mcp/wm-tools.js");
+      const wm = runtime.wmTools ?? new WmTools({ driver: runtime.wmDriver });
+      if (name === "wm_move_window") return await wm.moveWindow(args);
+      if (name === "wm_tile") return await wm.tile(args);
+      if (name === "wm_focus") return await wm.focus(args);
+      if (name === "wm_space_switch") return await wm.spaceSwitch(args);
+      return await wm.listWindows(args);
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
