@@ -102,15 +102,65 @@ No drift worth flagging.
 
 ## Security pass
 
-TBD
+**1. Prompt injection via user input into Haiku calls.** Two callsites: `suggestion-engine.ts:150–156` (P13 draft text) and `conversation-intent.ts:418` (P14 transcript). Both concatenate user-controlled strings directly into the user message. P13 wraps in triple-quotes but the string itself is not escaped — a draft containing `"""` closes the fence. P14 has no delimiter at all. **Blast radius is small**: P13's only side-effect is a coach suggestion that surfaces or whispers — still a phishing vector if an attacker can cause Nchinda to speak attacker-controlled text. P14's only side-effect is a PendingSurface row (non-executing). Mitigation: base64-encode or enclose in a random token pair before sending; alternatively, use Anthropic's structured tool-use rather than free-text JSON.
+
+**2. Time-parse with malicious inputs.** `parseTimePhrase("'; DROP TABLE users; --")` → matches no regex, returns `null` (safe). `typeof phrase !== "string"` bails at line 119. No ReDoS — all regexes are linear (anchored `^…$`, no nested `.*` quantifiers). `Number(agoMatch[1])` on an extreme `99999999999 weeks ago` produces a finite number but then `deltaMs` is multiplied by `UNIT_MS` and may overflow to `Infinity` → guarded by `Number.isFinite` check at line 131. Solid.
+
+**3. Intent classifier handling ALL transcripts (including read-aloud emails) — privacy surfacing review.** The Phase 14 side-channel fires on every non-control transcript (`voice-orchestrator.integ.ts:280`). If the user reads an email aloud containing "I should kill him", the classifier may return `stated-intent` with `verb=kill` and surface it. Two layers of defense:
+- `VERB_TO_TOOL` mapping (`conversation-intent.ts:255–271`) has no entry for violent verbs → `suggested_tool` is undefined → `intent-surface.ts:137–151` falls through without invoking a drafter.
+- Even with a `suggested_tool`, autonomous mode requires user confirmation and drafter is reversible-only.
+
+**But**: the raw transcript is stored in `data.transcript` on the surface row (`intent-surface.ts:205`) — so read-aloud private content lands in the PendingSurface. Under "silent" proactivity mode the row isn't inserted; under volunteer+ modes it is. Spec §7.2 says "No frames leave the Mac unless the user explicitly requests an LLM action" — text transcripts ARE shipped to Haiku via P14 classify. This is an existing design choice (Phase 5 voice path already did it) but P14 broadens the scope to every utterance vs. only those addressed to Nchinda. **Recommend**: respect the `"private-apps"` allowlist from VISION §7.7 — when the active app is in the private-apps list, skip conv-intent classification. Not a ship-blocker but a privacy follow-up.
+
+**4. zstd bomb protection in rewind decompression — MISSING.** `rewindSearch` at line 232 calls `zstdDecompressSync(row.ocr_text_zstd).toString("utf8")` with no `maxOutputLength` option. Node's `zstdDecompressSync` accepts an `options.maxOutputLength` (or you can pass `chunkSize`/use the streaming API) — not passed. A single row with a ratio-amplified zstd frame can allocate gigabytes. Realistic attack surface is low (the rows are written by the Phase 8.5 OCR pipeline, which compresses its own output), but "defense in depth" calls for a `maxOutputLength: 1_048_576` (1 MB is >> any realistic screen OCR text) and a try/catch — the existing try/catch at line 231 already covers throw, so adding `{ maxOutputLength: 1_048_576 }` is a one-line fix. **Top 5 patch #2**.
+
+**5. `nchinda_rewind` date-string coercion** (`nchinda-rewind.ts:46–53`) uses `new Date(v)` which happily accepts numbers-as-strings too. `new Date("12345")` → year 12345 AD. Line 49 `Number.isFinite(parsed.getTime())` filter catches unparseable strings (`"not-a-date"` → NaN) but not valid-but-bizarre ones. Low severity — all it does is filter out memories.
+
+**6. AXWatch permission check** (`AXWatchCommand.swift:28–31`). Process trusted check is first-thing; fails closed with `VisionError.permissionDenied`. Good.
+
+**7. Audit entry shape.** P13 appends `sensor_sample` / `surface` actions. P14 and P15 append `voice_intent`. Kill path (Phase 8.5) also uses `voice_intent`. Unified enum keeps grep-ability but means downstream consumers must parse `detail` to distinguish — document in Phase 8.5 `AuditAction` enum.
+
+**8. Redacted fallback reasons** in P13 + P14 both use a whitelist pattern — identical to existing `haiku-classifier.ts` — so raw error text (network endpoints, API keys accidentally in messages, etc.) never reaches audit logs or surface rows. Good discipline.
 
 ## Voice-orchestrator multi-intent sanity
 
-TBD
+Integration branch (`phase13-15/integration` @ `cde310c`). Branch order:
+
+```
+1. empty-transcript guard      (voice-orchestrator.integ.ts:209–213)
+2. extractIntent(transcript)   (line 219)
+3. kind === "kill"             (220–242) — ALWAYS WINS, bypasses conv-intent + onTask
+4. kind === "rewind" + handler (249–273) — short-circuits, speaks reply, returns
+5. dispatchConversationIntent()(280)      — fire-and-forget side-channel
+6. onTask(transcript)          (293)      — primary task path
+```
+
+**Mutually exclusive + correctly ordered? Yes.**
+- **Kill always wins**: placed before any other intent check and has an unconditional `return` at line 241. Tested explicitly by `voice-conv-integration.test.ts:204–242` ("kill intent still short-circuits BEFORE the conv-intent path runs").
+- **Rewind short-circuits cleanly**: only triggers if `rewindHandler` is wired (line 249). Without the handler, rewind transcripts fall through to `dispatchConversationIntent` + `onTask` (backward-compat tested at `rewind-voice-integration.test.ts:194–231`). Rewind branch has its own `return` at line 272.
+- **Conv-intent is a side-channel, not a branch**: `dispatchConversationIntent` at line 280 is fire-and-forget, no `return`. Every non-kill, non-rewind-with-handler transcript gets classified AND dispatched to onTask. Correct per spec: P14's router handles its own filtering on `kind !== "stated-intent"`.
+- **Empty-transcript**: handled at line 209 before intent classification → idle. No wasted LLM calls.
+- **Camera-query**: not in scope for P13-15 (Phase 9 — Reviewer 1). The voice-orchestrator has no `camera-query` branch in the integration merged here, consistent with P13-15 scope.
+- **Direct-command**: not a distinct branch in the **orchestrator**; Nchinda-addressed utterances fall through to `onTask` as normal tasks. Conv-intent *also* classifies them as `direct-command` but `intent-surface.ts:106–108` rejects non-stated-intent kinds so there's no double-dispatch. Correct.
+
+**Ordering caveat — minor**: the rewind short-circuit at line 249 happens BEFORE conv-intent dispatch at line 280, so rewind transcripts never enter the conv-intent classifier. This is explicitly called out by the comment at line 247 ("Rewind is a control intent, so we do NOT also fire the conv-intent side-channel"). Desirable.
+
+**Ordering caveat — raise**: `intent.kind === "pause" | "resume" | "config"` (line 219's `extractIntent` returns these kinds too) fall through to `dispatchConversationIntent` + `onTask`. Per the extractor comment "pause/resume/config fall through to onTask as-if they were normal tasks until Phase 9+ handles them" — so the conv-intent side-channel WILL run on "pause" / "nchinda set X=Y". That's a minor privacy leak (a config command reaches Haiku). **Top 5 patch #4**: add `if (intent.kind !== "task" && intent.kind !== "chat") return;` before `dispatchConversationIntent` to scope the side-channel to truly free-form transcripts.
 
 ## Test quality
 
-TBD
+**Failure paths covered:**
+- P13: `CoachSurface` TTS-throws fallthrough (coach-surface.test.ts:122–131). DraftWatcher spawn-throw backoff (asserted via `FakeBridge.throwNext`). Audit-append failure is swallowed — not tested but trivial.
+- P14: Haiku HTTP-503 → fallback (`conversation-intent.test.ts:152–161`), invalid JSON, schema mismatch, timeout, network error, no API key — all six failure modes covered. Registry-read failure (intent-surface.test.ts:275–290). Drafter-throws path (intent-surface.test.ts:199–211). Insert-throws (intent-surface.test.ts:306–324). This branch has the strongest failure-path test suite of the three.
+- P15: corrupt zstd blob surfaces via `onDecompressError` + row still returned (rewind-query.test.ts:209–233). Empty text throws (rewind-query.test.ts:252–263). Bogus ISO dates rejected by tool (nchinda-rewind-tool.test.ts:128–146). Rewind handler throws — only asserts no-crash via console.error (`voice-orchestrator.integ.ts:229–232`); no test asserts this explicitly. **Gap**: add a test that `rewindHandler.query()` throwing still transitions back to `idle`.
+
+**Mocks not hiding real bugs?** Spot-checks:
+- `primeTts()` in voice-conv-integration.test.ts uses `tts._armTestPromise()` — same pattern as existing phase-8.5 tests; TTS rejection paths (test case line 160–202) deliberately use a real `TextToSpeech` + `.speak("...")` and rely on `_resolveSpeak()`. No hidden bug.
+- `FakeBridge` in draft-watcher tests is a faithful NDJSON emitter; no obvious missed edge case. Kill path covered.
+- `ScriptedEmbedder` returns a fixed vector — intentional; cosine similarity is deterministic over int8 buffers. Real ONNX embedder is substitutable.
+- `ScreenMemoriesDB({ dbPath: ":memory:" })` uses an in-memory SQLite, so tests exercise the real schema, real zstd round-trip, real cosine math. Good.
+
+**Low-value regression tests? No.** Every test has a named failure it would catch.
 
 ## Top 5 patches before main
 
