@@ -8,9 +8,33 @@ import { appendFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
+/**
+ * Canonical audit action types.
+ *
+ * The original four (sensor_sample, surface, suppress, act_on) back the
+ * proactivity subsystem (Phase 5.5). Phase 8.5 adds perception-side actions
+ * so a user can audit exactly what cortexOS observed and every kill-switch
+ * firing:
+ *   - perception_killed — ⌘⇧Esc (or spoken "stop") fired; capturer force-off
+ *   - capture            — a ScreenCapturer tick produced (or failed to produce) a frame
+ *   - ocr                — Apple Vision OCR ran on a PNG
+ *   - vision_llm         — the vision-brief LLM polish path fired (Haiku)
+ *   - voice_intent       — the voice intent extractor routed a transcript
+ */
+export type AuditAction =
+  | "sensor_sample"
+  | "surface"
+  | "suppress"
+  | "act_on"
+  | "perception_killed"
+  | "capture"
+  | "ocr"
+  | "vision_llm"
+  | "voice_intent";
+
 export interface AuditEntry {
-  /** Action type: sensor_sample, surface, suppress, act_on */
-  action: "sensor_sample" | "surface" | "suppress" | "act_on";
+  /** Action type — see {@link AuditAction}. */
+  action: AuditAction;
   /** The sensor that produced the observation, if applicable. */
   sensorName?: string;
   /** Human-readable detail. */

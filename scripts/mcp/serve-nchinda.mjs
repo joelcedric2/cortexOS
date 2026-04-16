@@ -114,6 +114,16 @@ async function dispatch(name, args, tools) {
     case "nchinda_status":     return tools.coordination.status(args);
     case "nchinda_escalate":   return tools.coordination.escalate(args);
     case "nchinda_ask_peer":   return await tools.coordination.askPeer(args);
+    case "nchinda_see": {
+      const { nchindaSee } = await import("../../dist/mcp/nchinda-see.js");
+      const { buildBrief } = await import("../../dist/perception/vision-brief.js");
+      const { ScreenCapturer } = await import("../../dist/perception/screen-capture.js");
+      // Runtime-shared capturer (wired by Orchestrator). Fallback: a fresh
+      // instance that won't have called `.start()` yet — captureNow() still
+      // works independently of the loop.
+      const capturer = runtime.screenCapturer ?? new ScreenCapturer();
+      return await nchindaSee(args ?? {}, { capturer, brief: buildBrief });
+    }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
       return await webSearch(args?.query ?? "", {
@@ -149,6 +159,19 @@ async function dispatch(name, args, tools) {
       const st = new SocialTools({ drivers, socialDb, eventBus });
       if (name === "social_send") return await st.send(args);
       return st.post(args);
+    }
+    case "wm_move_window":
+    case "wm_tile":
+    case "wm_focus":
+    case "wm_space_switch":
+    case "wm_list_windows": {
+      const { WmTools } = await import("../../dist/mcp/wm-tools.js");
+      const wm = runtime.wmTools ?? new WmTools({ driver: runtime.wmDriver });
+      if (name === "wm_move_window") return await wm.moveWindow(args);
+      if (name === "wm_tile") return await wm.tile(args);
+      if (name === "wm_focus") return await wm.focus(args);
+      if (name === "wm_space_switch") return await wm.spaceSwitch(args);
+      return await wm.listWindows(args);
     }
     default: {
       const err = new Error(`unknown tool: ${name}`);

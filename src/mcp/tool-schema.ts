@@ -582,6 +582,105 @@ export const SOCIAL_POST_SCHEMA: McpToolSchema = {
   },
 };
 
+// ────────────────────────── Window-Manager Tools ──────────────────────────
+
+export const WM_MOVE_WINDOW_SCHEMA: McpToolSchema = {
+  name: "wm_move_window",
+  description:
+    "Relocate and/or resize a window. Any subset of {space, display, x, y, w, h} may be supplied; omitted fields leave that dimension unchanged. Returns {ok:false, error:'wm-unavailable'} if neither yabai nor AppleScript is usable.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      windowId: { type: "integer", minimum: 1, description: "macOS window id." },
+      space: { type: "integer", minimum: 1, description: "Target Mission Control space (1-indexed)." },
+      display: { type: "integer", minimum: 1, description: "Target display (1-indexed)." },
+      x: { type: "integer", description: "New top-left x in screen points." },
+      y: { type: "integer", description: "New top-left y in screen points." },
+      w: { type: "integer", minimum: 1, description: "New width in screen points." },
+      h: { type: "integer", minimum: 1, description: "New height in screen points." },
+    },
+    required: ["windowId"],
+    additionalProperties: false,
+  },
+};
+
+export const WM_TILE_SCHEMA: McpToolSchema = {
+  name: "wm_tile",
+  description:
+    "Apply a tiling layout to the current space: full, vsplit, hsplit, columns-3, columns-4, grid-2x2, or grid-3x2. Returns {ok:false, error:'wm-unavailable'} when the driver is missing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      layout: {
+        type: "string",
+        enum: ["full", "vsplit", "hsplit", "columns-3", "columns-4", "grid-2x2", "grid-3x2"],
+        description: "Layout name.",
+      },
+    },
+    required: ["layout"],
+    additionalProperties: false,
+  },
+};
+
+export const WM_FOCUS_SCHEMA: McpToolSchema = {
+  name: "wm_focus",
+  description:
+    "Raise and activate a window by id. Returns {ok:false, error:'wm-unavailable'} if the driver is missing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      windowId: { type: "integer", minimum: 1, description: "macOS window id." },
+    },
+    required: ["windowId"],
+    additionalProperties: false,
+  },
+};
+
+export const WM_SPACE_SWITCH_SCHEMA: McpToolSchema = {
+  name: "wm_space_switch",
+  description:
+    "Jump to the given Mission Control space (1-indexed). Returns {ok:false, error:'wm-unavailable'} if the driver is missing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      index: { type: "integer", minimum: 1, description: "Target space index (1-indexed)." },
+    },
+    required: ["index"],
+    additionalProperties: false,
+  },
+};
+
+export const WM_LIST_WINDOWS_SCHEMA: McpToolSchema = {
+  name: "wm_list_windows",
+  description:
+    "Enumerate visible windows and spaces. Returns {ok:true, windows, spaces} or {ok:false, error:'wm-unavailable'}.",
+  inputSchema: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  },
+};
+
+// ────────────────────────── Perception Tools ──────────────────────────────
+
+export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
+  name: "nchinda_see",
+  description:
+    "Capture one fresh screenshot via the macOS ScreenCaptureKit helper and return a compact VisionBrief (active_app, window_title, summary, visible_text, sentiment). Default `mode` is `local-only` (no network call). Pass `mode: \"llm\"` to opt in to a Claude Haiku vision polish step — falls back to local-only on any failure. Frames from private apps (1Password, Keychain, banking, …) are captured but never leave the device regardless of mode.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        enum: ["local-only", "llm"],
+        description:
+          "local-only (default) = OCR + heuristic summary, zero network. llm = adds one Claude Haiku vision call with graceful fallback to local-only.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -593,6 +692,7 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_STATUS_SCHEMA,
   NCHINDA_ESCALATE_SCHEMA,
   NCHINDA_ASK_PEER_SCHEMA,
+  NCHINDA_SEE_SCHEMA,
   WEB_SEARCH_SCHEMA,
   TOOL_DISCOVERY_SCHEMA,
   SKILL_DISCOVER_SCHEMA,
@@ -607,4 +707,9 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   CDP_WAIT_FOR_SCHEMA,
   SOCIAL_SEND_SCHEMA,
   SOCIAL_POST_SCHEMA,
+  WM_MOVE_WINDOW_SCHEMA,
+  WM_TILE_SCHEMA,
+  WM_FOCUS_SCHEMA,
+  WM_SPACE_SWITCH_SCHEMA,
+  WM_LIST_WINDOWS_SCHEMA,
 ];
