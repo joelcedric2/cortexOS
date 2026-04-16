@@ -20,6 +20,10 @@ import { homedir } from "node:os";
  *   - ocr                — Apple Vision OCR ran on a PNG
  *   - vision_llm         — the vision-brief LLM polish path fired (Haiku)
  *   - voice_intent       — the voice intent extractor routed a transcript
+ *
+ * Phase 9 adds camera-side actions (always on-demand, never looped):
+ *   - camera_capture     — a single AVFoundation frame was captured
+ *   - camera_llm         — Claude Sonnet vision polish path fired for a camera frame
  */
 export type AuditAction =
   | "sensor_sample"
@@ -30,7 +34,9 @@ export type AuditAction =
   | "capture"
   | "ocr"
   | "vision_llm"
-  | "voice_intent";
+  | "voice_intent"
+  | "camera_capture"
+  | "camera_llm";
 
 export interface AuditEntry {
   /** Action type — see {@link AuditAction}. */
