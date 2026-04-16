@@ -1,13 +1,14 @@
 // cortexos-vision — tiny CLI entry point.
 //
 // Subcommands:
-//   capture [--app <bundle-id>] [--out <path>]
-//   ocr     --image <path>
+//   capture         [--app <bundle-id>] [--out <path>]
+//   ocr             --image <path>
+//   camera-capture  --out <path> [--device front|back|continuity]
 //
 // All results emitted as a single JSON object to stdout. Errors go to stderr
 // and the process exits with a non-zero status. When the user has not granted
-// Screen Recording permission, we print "permission-denied" to stderr so the
-// TypeScript bridge can surface a clean error.
+// Screen Recording or Camera permission, we print "permission-denied" to
+// stderr so the TypeScript bridge can surface a clean error.
 //
 // IMPORTANT: This binary makes no network calls. Everything stays on-device.
 
@@ -28,6 +29,8 @@ struct CortexOSVision {
                 try await CaptureCommand.run(args: rest)
             case "ocr":
                 try await OCRCommand.run(args: rest)
+            case "camera-capture":
+                try await CameraCommand.run(args: rest)
             case "--help", "-h", "help":
                 printUsage()
             default:
@@ -51,12 +54,13 @@ struct CortexOSVision {
         Usage:
           cortexos-vision capture [--app <bundle-id>] [--out <path>]
           cortexos-vision ocr --image <path>
+          cortexos-vision camera-capture --out <path> [--device front|back|continuity]
 
         Exit codes:
           0  success
           1  generic error
           2  usage error
-          3  permission-denied (Screen Recording / Vision not granted)
+          3  permission-denied (Screen Recording / Vision / Camera not granted)
         """
         print(usage)
     }
