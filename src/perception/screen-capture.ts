@@ -24,6 +24,7 @@ import {
   type NativeCaptureResult,
   type VisionBridge,
 } from "./native-bridge.js";
+import type { AuditLog } from "../proactivity/audit.js";
 
 /** A single captured screen frame held in the ring buffer. */
 export interface ScreenFrame {
@@ -56,6 +57,12 @@ export interface ScreenCaptureOptions {
   bridge?: VisionBridge;
   /** Override the timer for deterministic tests. */
   scheduler?: CaptureScheduler;
+  /**
+   * Optional audit log. When provided, every successful capture AND every
+   * private-app / error skip appends one NDJSON line via
+   * `audit.append({action: 'capture', detail, ts})`. Phase 8.5 wiring.
+   */
+  audit?: AuditLog;
 }
 
 /** Minimal scheduler contract — tests swap this for a manual driver. */
@@ -106,6 +113,7 @@ export class ScreenCapturer {
   private readonly privateApps: Set<string>;
   private readonly bridge: VisionBridge;
   private readonly scheduler: CaptureScheduler;
+  private readonly audit: AuditLog | undefined;
 
   private frames: ScreenFrame[] = [];
   private running = false;
@@ -125,6 +133,7 @@ export class ScreenCapturer {
     this.privateApps = new Set(opts.privateAppAllowlist ?? DEFAULT_PRIVATE_APPS);
     this.bridge = opts.bridge ?? createNativeBridge();
     this.scheduler = opts.scheduler ?? defaultScheduler();
+    this.audit = opts.audit;
   }
 
   /** Begin the capture loop. Idempotent — a second call is a no-op. */
@@ -215,10 +224,14 @@ export class ScreenCapturer {
       await this.doCapture();
     } catch (err) {
       // Private-app skips are expected — count them without noise.
-      if (err instanceof PrivateAppSkippedError) return;
+      if (err instanceof PrivateAppSkippedError) {
+        this.recordAudit(`skip=private_app bundle=${err.bundleId}`);
+        return;
+      }
       // Anything else: log once. The loop keeps running; next tick may succeed.
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[screen-capture] tick failed: ${msg}`);
+      this.recordAudit(`error=${redactErr(msg)}`);
     }
   }
 
@@ -236,7 +249,27 @@ export class ScreenCapturer {
     const frame = toFrame(id, pngPath, raw);
     this.frames.push(frame);
     await this.evictOverflow();
+    this.recordAudit(`app=${frame.active_app ?? "unknown"}`);
     return frame;
+  }
+
+  /**
+   * Append an audit line for a capture-related side-effect. No-op when no
+   * AuditLog was injected. Never throws — audit is best-effort; a broken
+   * sink must not bring down the capture loop.
+   */
+  private recordAudit(detail: string): void {
+    if (!this.audit) return;
+    try {
+      this.audit.append({
+        action: "capture",
+        detail,
+        ts: new Date(),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[screen-capture] audit append failed: ${msg}`);
+    }
   }
 
   private isPrivateBundle(bundle: string | null | undefined): boolean {
@@ -289,4 +322,18 @@ async function tryUnlink(p: string): Promise<void> {
 /** Convenience: a default storage dir under tmp for throwaway instances. */
 export function ephemeralStorageDir(): string {
   return join(tmpdir(), `cortexos-screens-${randomUUID()}`);
+}
+
+/**
+ * Reduce a raw error message to a short, stable label before it enters the
+ * audit log. The audit file is readable by the user, so we avoid leaking
+ * full stack traces / URLs / API keys. Pattern mirrors vision-brief's
+ * redactReason() so audits stay consistent.
+ */
+function redactErr(msg: string): string {
+  if (/timeout|abort|deadline/i.test(msg)) return "timeout";
+  if (/permission/i.test(msg)) return "permission-denied";
+  if (/enoent|not found/i.test(msg)) return "not-found";
+  if (/network|econn|enotfound|fetch/i.test(msg)) return "network";
+  return "unknown";
 }
