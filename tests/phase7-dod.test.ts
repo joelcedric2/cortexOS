@@ -47,6 +47,16 @@ import {
   type BudgetDB,
 } from "../src/observability/budget-tracker.js";
 
+// Bullet 6 — ladder rungs 4..7
+import {
+  defaultLadderStrategies,
+  AskPeerStrategy,
+  RecallMemoryStrategy,
+  WebSearchStrategy,
+  EscalateStrategy,
+} from "../src/loop/fallback-strategies.js";
+import type { FallbackContext } from "../src/loop/types.js";
+
 // Bullet 7 — orchestrator split
 import * as researcherExecutor from "../src/orchestrator/researcher-executor.js";
 import * as designerRecall from "../src/orchestrator/designer-recall.js";
@@ -492,21 +502,96 @@ describe("Phase 7 DoD §5 — budget tracker totalsInWindow", () => {
   });
 });
 
-// ─── Bullet 6 — Ladder rungs 4..7 (skipped — C4 not yet landed) ─────────────
+// ─── Bullet 6 — Ladder rungs 4..7 walk in rung order ─────────────────────────
 
 describe("Phase 7 DoD §6 — ladder rungs 4..7 walk in order", () => {
-  test.skip("injected 3-failure attempt walks ask_peer → recall → web → escalate (pending C4)", () => {
-    // Pending on `phase7/hardening-backlog` — rungs 4..7 haven't been
-    // committed yet. The test will be filled in once C4 exports
-    // `defaultLadderStrategies` (or equivalent) with all 7 rungs.
-    //
-    // Outline:
-    //   const loop = createAutonomyLoop({ strategies: defaultLadderStrategies(), ... });
-    //   const events: AgentEvent[] = [];
-    //   bus.subscribe({...}, (e) => events.push(e));
-    //   loop.run('flaky task'); // runTaskFn fails 3× with a non-transient error
-    //   const rungs = events.filter(e => e.kind === 'rung_fired').map(e => e.payload.rung);
-    //   assert.deepEqual(rungs, [4, 5, 6, 7]);
+  test("defaultLadderStrategies returns 7 rungs in rung order when all deps are supplied", () => {
+    const askPeerCalls: Array<{ role?: string; question?: string }> = [];
+    const recallCalls: Array<{ query?: string }> = [];
+    const webCalls: string[] = [];
+    const escalateCalls: Array<{ reason?: string }> = [];
+
+    const strategies = defaultLadderStrategies({
+      askPeer: {
+        listAgents: () => [],
+        askPeer: async (input) => {
+          askPeerCalls.push(input);
+          return { ok: false, reason: "no-peer" };
+        },
+      },
+      recallMemory: {
+        recall: async (query) => {
+          recallCalls.push({ query });
+          return [];
+        },
+      },
+      webSearch: {
+        webSearch: async (query) => {
+          webCalls.push(query);
+          return [];
+        },
+      },
+      escalate: {
+        escalate: async (input) => {
+          escalateCalls.push(input);
+          return { acknowledged: true };
+        },
+      },
+    });
+
+    // All 7 rungs present, in rung order (1..7).
+    assert.equal(strategies.length, 7, `expected 7 ladder rungs, got ${strategies.length}`);
+    const rungs = strategies.map((s) => s.rung);
+    assert.deepEqual(rungs, [1, 2, 3, 4, 5, 6, 7]);
+
+    // Names should correspond to the ladder spec.
+    const names = strategies.map((s) => s.name);
+    assert.deepEqual(names, [
+      "retry-same",
+      "alternate-tool",
+      "reduce-scope",
+      "ask-peer",
+      "recall-memory",
+      "web-search",
+      "escalate",
+    ]);
+
+    // Confirm the rung-4..7 classes implement FallbackStrategy surface
+    // (`canHandle` + `apply`).
+    const rung4 = strategies[3]!;
+    const rung5 = strategies[4]!;
+    const rung6 = strategies[5]!;
+    const rung7 = strategies[6]!;
+    assert.ok(rung4 instanceof AskPeerStrategy);
+    assert.ok(rung5 instanceof RecallMemoryStrategy);
+    assert.ok(rung6 instanceof WebSearchStrategy);
+    assert.ok(rung7 instanceof EscalateStrategy);
+    for (const s of [rung4, rung5, rung6, rung7]) {
+      assert.equal(typeof s.canHandle, "function");
+      assert.equal(typeof s.apply, "function");
+    }
+  });
+
+  test("EscalateStrategy (rung 7) always handles and invokes escalate()", async () => {
+    const escalateCalls: Array<{ reason?: string }> = [];
+    const rung7 = new EscalateStrategy({
+      escalate: async (input) => {
+        escalateCalls.push(input);
+        return { acknowledged: true };
+      },
+    });
+
+    const ctx: FallbackContext = {
+      task: "flaky task",
+      taskId: "tx",
+      attempt: 3,
+      lastError: new Error("ladder-exhausted"),
+    };
+
+    assert.equal(await rung7.canHandle(ctx), true);
+    const outcome = await rung7.apply(ctx);
+    assert.equal(outcome.handled, true);
+    assert.equal(escalateCalls.length, 1);
   });
 });
 
