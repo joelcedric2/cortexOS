@@ -681,6 +681,239 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   },
 };
 
+// ────────────────────────── Comms App Tools (Phase 12a) ──────────────────
+
+export const MAIL_COMPOSE_SCHEMA: McpToolSchema = {
+  name: "mail_compose",
+  description:
+    "Compose a new outgoing mail draft in Mail.app. Returns {draftId}. Does NOT send — use mail_send (which triggers an escalation) to actually transmit.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      to: {
+        description: "Single address string or array of addresses.",
+        oneOf: [
+          { type: "string", minLength: 1 },
+          { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+        ],
+      },
+      subject: { type: "string", minLength: 1, maxLength: 998 },
+      body: { type: "string", minLength: 1, maxLength: 200000 },
+      cc: { type: "array", items: { type: "string", minLength: 1 } },
+      bcc: { type: "array", items: { type: "string", minLength: 1 } },
+    },
+    required: ["to", "subject", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const MAIL_SEND_SCHEMA: McpToolSchema = {
+  name: "mail_send",
+  description:
+    "Send a queued mail draft by id. IRREVERSIBLE — fires an escalation before transmitting.",
+  inputSchema: {
+    type: "object",
+    properties: { draftId: { type: "string", minLength: 1 } },
+    required: ["draftId"],
+    additionalProperties: false,
+  },
+};
+
+export const MAIL_REPLY_SCHEMA: McpToolSchema = {
+  name: "mail_reply",
+  description:
+    "Create a reply draft to an existing message. Reversible — returns {draftId}; user must separately call mail_send to transmit.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      messageId: { type: "string", minLength: 1 },
+      body: { type: "string", minLength: 1, maxLength: 200000 },
+    },
+    required: ["messageId", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const MAIL_SEARCH_SCHEMA: McpToolSchema = {
+  name: "mail_search",
+  description:
+    "Search the Inbox by subject+content substring. Returns up to `limit` hits (default 20, max 200).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 1000 },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+export const MAIL_UNREAD_COUNT_SCHEMA: McpToolSchema = {
+  name: "mail_unread_count",
+  description: "Return {count} of unread messages in the Inbox.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const MAIL_ARCHIVE_SCHEMA: McpToolSchema = {
+  name: "mail_archive",
+  description:
+    "Move a message from the Inbox to the Archive mailbox. Reversible within Mail.app.",
+  inputSchema: {
+    type: "object",
+    properties: { messageId: { type: "string", minLength: 1 } },
+    required: ["messageId"],
+    additionalProperties: false,
+  },
+};
+
+export const MAIL_FLAG_SCHEMA: McpToolSchema = {
+  name: "mail_flag",
+  description: "Flag or unflag an Inbox message.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      messageId: { type: "string", minLength: 1 },
+      on: { type: "boolean" },
+    },
+    required: ["messageId", "on"],
+    additionalProperties: false,
+  },
+};
+
+export const MESSAGES_SEND_SCHEMA: McpToolSchema = {
+  name: "messages_send",
+  description:
+    "Send an iMessage to a single handle (phone, email, Apple-ID). IRREVERSIBLE — fires an escalation before transmitting.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      to: { type: "string", minLength: 1, maxLength: 256 },
+      body: { type: "string", minLength: 1, maxLength: 10000 },
+      attachments: {
+        type: "array",
+        items: { type: "string", minLength: 1 },
+        maxItems: 10,
+      },
+    },
+    required: ["to", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const MESSAGES_SEND_GROUP_SCHEMA: McpToolSchema = {
+  name: "messages_send_group",
+  description:
+    "Send an iMessage to an existing group chat. IRREVERSIBLE — fires an escalation before transmitting.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      chatId: { type: "string", minLength: 1, maxLength: 256 },
+      body: { type: "string", minLength: 1, maxLength: 10000 },
+    },
+    required: ["chatId", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const MESSAGES_REACT_SCHEMA: McpToolSchema = {
+  name: "messages_react",
+  description:
+    "React to a message with a tapback emoji. Phase 12a audits the intent; full UI scripting lands in 12b.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      messageId: { type: "string", minLength: 1 },
+      emoji: { type: "string", minLength: 1, maxLength: 16 },
+    },
+    required: ["messageId", "emoji"],
+    additionalProperties: false,
+  },
+};
+
+export const MESSAGES_LIST_RECENT_SCHEMA: McpToolSchema = {
+  name: "messages_list_recent",
+  description: "List the `limit` most recent messages across chats (default 20).",
+  inputSchema: {
+    type: "object",
+    properties: { limit: { type: "integer", minimum: 1, maximum: 200 } },
+    additionalProperties: false,
+  },
+};
+
+export const MESSAGES_UNREAD_COUNT_SCHEMA: McpToolSchema = {
+  name: "messages_unread_count",
+  description: "Return {count} of chats with any unread message.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const CALENDAR_CREATE_SCHEMA: McpToolSchema = {
+  name: "calendar_create",
+  description:
+    "Create a calendar event. IRREVERSIBLE (invites) — fires an escalation before creating when `attendees` is non-empty.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: { type: "string", minLength: 1, maxLength: 512 },
+      start: { type: "string", description: "ISO-8601 timestamp" },
+      end: { type: "string", description: "ISO-8601 timestamp" },
+      calendar: { type: "string", minLength: 1, maxLength: 128 },
+      location: { type: "string", maxLength: 512 },
+      notes: { type: "string", maxLength: 10000 },
+      attendees: {
+        type: "array",
+        items: { type: "string", minLength: 1 },
+        maxItems: 100,
+      },
+    },
+    required: ["title", "start", "end"],
+    additionalProperties: false,
+  },
+};
+
+export const CALENDAR_FIND_GAP_SCHEMA: McpToolSchema = {
+  name: "calendar_find_gap",
+  description:
+    "Find free gaps of at least `durationMin` minutes in [from, to]. Queries busy events from Calendar.app and computes gaps locally.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      from: { type: "string", description: "ISO-8601 timestamp" },
+      to: { type: "string", description: "ISO-8601 timestamp" },
+      durationMin: { type: "integer", minimum: 1, maximum: 1440 },
+    },
+    required: ["from", "to", "durationMin"],
+    additionalProperties: false,
+  },
+};
+
+export const CALENDAR_DECLINE_SCHEMA: McpToolSchema = {
+  name: "calendar_decline",
+  description: "Mark an event as cancelled; optional reason is audited.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      eventId: { type: "string", minLength: 1 },
+      reason: { type: "string", maxLength: 1000 },
+    },
+    required: ["eventId"],
+    additionalProperties: false,
+  },
+};
+
+export const CALENDAR_LIST_UPCOMING_SCHEMA: McpToolSchema = {
+  name: "calendar_list_upcoming",
+  description:
+    "List events starting within the next `withinMin` minutes (default 1440 = 24h, max 14 days).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      withinMin: { type: "integer", minimum: 1, maximum: 20160 },
+    },
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -712,4 +945,20 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   WM_FOCUS_SCHEMA,
   WM_SPACE_SWITCH_SCHEMA,
   WM_LIST_WINDOWS_SCHEMA,
+  MAIL_COMPOSE_SCHEMA,
+  MAIL_SEND_SCHEMA,
+  MAIL_REPLY_SCHEMA,
+  MAIL_SEARCH_SCHEMA,
+  MAIL_UNREAD_COUNT_SCHEMA,
+  MAIL_ARCHIVE_SCHEMA,
+  MAIL_FLAG_SCHEMA,
+  MESSAGES_SEND_SCHEMA,
+  MESSAGES_SEND_GROUP_SCHEMA,
+  MESSAGES_REACT_SCHEMA,
+  MESSAGES_LIST_RECENT_SCHEMA,
+  MESSAGES_UNREAD_COUNT_SCHEMA,
+  CALENDAR_CREATE_SCHEMA,
+  CALENDAR_FIND_GAP_SCHEMA,
+  CALENDAR_DECLINE_SCHEMA,
+  CALENDAR_LIST_UPCOMING_SCHEMA,
 ];

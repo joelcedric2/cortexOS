@@ -173,6 +173,62 @@ async function dispatch(name, args, tools) {
       if (name === "wm_space_switch") return await wm.spaceSwitch(args);
       return await wm.listWindows(args);
     }
+    case "mail_compose":
+    case "mail_send":
+    case "mail_reply":
+    case "mail_search":
+    case "mail_unread_count":
+    case "mail_archive":
+    case "mail_flag":
+    case "messages_send":
+    case "messages_send_group":
+    case "messages_react":
+    case "messages_list_recent":
+    case "messages_unread_count":
+    case "calendar_create":
+    case "calendar_find_gap":
+    case "calendar_decline":
+    case "calendar_list_upcoming": {
+      const [
+        { createAppCommsTools },
+        { createMailDriver },
+        { createMessagesDriver },
+        { createCalendarDriver },
+      ] = await Promise.all([
+        import("../../dist/mcp/app-tools-comms.js"),
+        import("../../dist/apps/mail-driver.js"),
+        import("../../dist/apps/messages-driver.js"),
+        import("../../dist/apps/calendar-driver.js"),
+      ]);
+      const mail = runtime.mailDriver ?? createMailDriver({ audit: runtime.auditLog });
+      const messages = runtime.messagesDriver ?? createMessagesDriver({ audit: runtime.auditLog });
+      const calendar = runtime.calendarDriver ?? createCalendarDriver({ audit: runtime.auditLog });
+      const comms = runtime.appCommsTools ?? createAppCommsTools({
+        mail,
+        messages,
+        calendar,
+        escalate: (a) => tools.coordination.escalate(a),
+      });
+      switch (name) {
+        case "mail_compose":          return await comms.mailCompose(args);
+        case "mail_send":             return await comms.mailSend(args);
+        case "mail_reply":            return await comms.mailReply(args);
+        case "mail_search":           return await comms.mailSearch(args);
+        case "mail_unread_count":     return await comms.mailUnreadCount(args);
+        case "mail_archive":          return await comms.mailArchive(args);
+        case "mail_flag":             return await comms.mailFlag(args);
+        case "messages_send":         return await comms.messagesSend(args);
+        case "messages_send_group":   return await comms.messagesSendGroup(args);
+        case "messages_react":        return await comms.messagesReact(args);
+        case "messages_list_recent":  return await comms.messagesListRecent(args);
+        case "messages_unread_count": return await comms.messagesUnreadCount(args);
+        case "calendar_create":       return await comms.calendarCreate(args);
+        case "calendar_find_gap":     return await comms.calendarFindGap(args);
+        case "calendar_decline":      return await comms.calendarDecline(args);
+        case "calendar_list_upcoming":return await comms.calendarListUpcoming(args);
+      }
+      return null;
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
