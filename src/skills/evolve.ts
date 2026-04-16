@@ -148,39 +148,24 @@ function bumpPatch(version: string): string {
   return `${major}.${minor}.${isNaN(patch) ? 1 : patch + 1}`;
 }
 
-/**
- * Build the Haiku prompt for proposing a patch.
- */
-function buildPatchPrompt(
-  skillSource: string,
-  errorClass: string,
-  failureTraces: FailureEntry[],
-): string {
-  const traces = failureTraces
-    .slice(0, 5)
-    .map((f) => `- [${f.timestamp}] ${f.error_message}`)
-    .join("\n");
+/** Build the Haiku prompt for proposing a patch. */
+function buildPatchPrompt(source: string, errorClass: string, traces: FailureEntry[]): string {
+  const traceLines = traces.slice(0, 5).map((f) => `- [${f.timestamp}] ${f.error_message}`).join("\n");
+  return `You are a code repair assistant. A skill is failing with a recurring error pattern.
 
-  return [
-    "You are a code repair assistant. A skill is failing with a recurring error pattern.",
-    "",
-    `Error class: ${errorClass}`,
-    `Recent failure traces:`,
-    traces,
-    "",
-    "Skill source code:",
-    "```",
-    skillSource,
-    "```",
-    "",
-    "Propose a minimal patch to fix this recurring failure. Return JSON only:",
-    '{"files": [{"path": "<relative-path>", "before": "<exact-text-to-replace>", "after": "<replacement>"}], "rationale": "<1-sentence explanation>"}',
-    "",
-    "Rules:",
-    "- Patches must be minimal — change only what's needed",
-    "- Do not change test files",
-    "- before strings must exactly match existing source text",
-  ].join("\n");
+Error class: ${errorClass}
+Recent failure traces:
+${traceLines}
+
+Skill source code:
+\`\`\`
+${source}
+\`\`\`
+
+Propose a minimal patch. Return JSON only:
+{"files": [{"path": "<relative-path>", "before": "<exact-text>", "after": "<replacement>"}], "rationale": "<1-sentence>"}
+
+Rules: patches must be minimal, do not change test files, before strings must exactly match source text.`;
 }
 
 const PATCH_SYSTEM_PROMPT =
@@ -480,44 +465,22 @@ async function benchmarkComparison(
   patchedDir: string,
   deps: Pick<EvolveDeps, "runShell" | "exists">,
 ): Promise<{ rejected: boolean; slowdownPct: number }> {
-  // Check for a benchmark script
   const benchScript = `${originalDir}/bench.ts`;
-  const hasBench = await deps.exists(benchScript);
+  if (!(await deps.exists(benchScript))) return { rejected: false, slowdownPct: 0 };
 
-  if (!hasBench) {
-    // No benchmark script — skip benchmark check (pass by default)
-    return { rejected: false, slowdownPct: 0 };
-  }
+  const runBench = (cwd: string, script: string) =>
+    deps.runShell(["node", "--import", "tsx/esm", script], { cwd, callerRole: "system", timeoutMs: 30_000 });
 
-  // Run benchmark on original
-  const origResult = await deps.runShell(
-    ["node", "--import", "tsx/esm", benchScript],
-    { cwd: originalDir, callerRole: "system", timeoutMs: 30_000 },
-  );
+  const [origResult, patchResult] = await Promise.all([
+    runBench(originalDir, benchScript),
+    runBench(patchedDir, `${patchedDir}/bench.ts`),
+  ]);
 
-  // Run benchmark on patched
-  const patchedBenchScript = `${patchedDir}/bench.ts`;
-  const patchResult = await deps.runShell(
-    ["node", "--import", "tsx/esm", patchedBenchScript],
-    { cwd: patchedDir, callerRole: "system", timeoutMs: 30_000 },
-  );
-
-  // Parse timing from output. Expects last line: "bench_ms: <number>"
+  const parseBenchMs = (out: string) => parseFloat(out.match(/bench_ms:\s*([\d.]+)/)?.[1] ?? "0");
   const origMs = parseBenchMs(origResult.stdout);
   const patchMs = parseBenchMs(patchResult.stdout);
+  if (origMs === 0) return { rejected: false, slowdownPct: 0 };
 
-  if (origMs === 0) {
-    return { rejected: false, slowdownPct: 0 };
-  }
-
-  const slowdownPct = ((patchMs - origMs) / origMs);
-  return {
-    rejected: slowdownPct > BENCHMARK_SLOWDOWN_THRESHOLD,
-    slowdownPct: slowdownPct * 100,
-  };
-}
-
-function parseBenchMs(output: string): number {
-  const match = output.match(/bench_ms:\s*([\d.]+)/);
-  return match ? parseFloat(match[1]) : 0;
+  const slowdown = (patchMs - origMs) / origMs;
+  return { rejected: slowdown > BENCHMARK_SLOWDOWN_THRESHOLD, slowdownPct: slowdown * 100 };
 }
