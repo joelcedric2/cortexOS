@@ -25,7 +25,8 @@ export type VoiceIntentKind =
   | "resume"
   | "config"
   | "chat"
-  | "camera-query";
+  | "camera-query"
+  | "rewind";
 
 export interface VoiceIntent {
   kind: VoiceIntentKind;
@@ -67,6 +68,10 @@ const CAMERA_QUERY_REGEX =
 // etc. Kept deliberately narrow — we do NOT want "is this mission on
 // track?" style meta-questions to trigger camera capture.
 const CAMERA_IS_THIS_REGEX = /^is\s+(this|that)\b.*\?$/i;
+
+// Rewind — Phase 15 retroactive queries.
+const REWIND_REGEX =
+  /^(what\s+was\s+(i|that)\b|show\s+me\s+(the|that)\b|find\s+(the|that)\b|remember\s+when\s+i\b)/i;
 
 /**
  * Extract a VoiceIntent from a raw transcript.
@@ -126,6 +131,16 @@ export function extractIntent(transcript: string): VoiceIntent {
     return {
       kind: "camera-query",
       payload: { transcript: normalized, question: punctPreserved },
+      confidence: 1,
+    };
+  }
+
+  // Rewind — detect with or without the "nchinda, " prefix.
+  const rewindCandidate = normalized.replace(/^nchinda,?\s+/i, "");
+  if (REWIND_REGEX.test(rewindCandidate)) {
+    return {
+      kind: "rewind",
+      payload: { transcript: rewindCandidate },
       confidence: 1,
     };
   }

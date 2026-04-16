@@ -22,6 +22,24 @@ import type {
   NchindaLookInput,
   NchindaLookResult,
 } from "../mcp/nchinda-look.js";
+import type { RewindResult } from "../rewind/rewind-query.js";
+import type { ConvIntent } from "../intent/conversation-intent.js";
+
+/**
+ * Result-surface sink for rewind hits. Wired by the Orchestrator to the
+ * Pending Surface so the user can click-through to open the WebP. No-op
+ * when unwired — the top-1 result is still spoken via TTS.
+ */
+export interface RewindSurface {
+  present(results: RewindResult[]): void;
+}
+
+/**
+ * Handler for Phase 15 rewind queries.
+ */
+export interface RewindHandler {
+  query(transcript: string): Promise<RewindResult[]>;
+}
 
 export interface VoiceOrchestratorOptions {
   wakeWord: WakeWordDetector;
@@ -46,11 +64,24 @@ export interface VoiceOrchestratorOptions {
   /**
    * Phase 9 — when supplied, `camera-query` transcripts ("what am I
    * looking at", "is that a bird?") bypass `onTask` and instead call
-   * this function. The returned description is spoken via TTS. When
-   * absent, camera-query intents fall through to `onTask` unchanged so
-   * existing deployments keep working.
+   * this function.
    */
   onCameraQuery?: (input: NchindaLookInput) => Promise<NchindaLookResult>;
+  /**
+   * Phase 15 — if supplied, transcripts classified as `rewind` intents are
+   * routed through this handler instead of the generic task pipeline.
+   */
+  rewindHandler?: RewindHandler;
+  /** Optional Pending-Surface sink for the full top-5 rewind result set. */
+  rewindSurface?: RewindSurface;
+  /**
+   * Phase 14 — conversation-intent side-channel. Runs in parallel with
+   * onTask; never auto-executes.
+   */
+  conversationIntent?: {
+    classify: (transcript: string) => Promise<ConvIntent>;
+    route: (intent: ConvIntent) => Promise<unknown>;
+  };
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -68,6 +99,12 @@ export class VoiceOrchestrator {
   private readonly onCameraQuery:
     | ((input: NchindaLookInput) => Promise<NchindaLookResult>)
     | undefined;
+  private readonly rewindHandler: RewindHandler | undefined;
+  private readonly rewindSurface: RewindSurface | undefined;
+  private readonly conversationIntent:
+    | VoiceOrchestratorOptions["conversationIntent"]
+    | undefined;
+  private lastConvIntentTask: Promise<void> | undefined;
   /** User name for personalized greetings. Reserved for Phase 6 UI. */
   readonly userName: string | undefined;
   private running = false;
@@ -90,7 +127,10 @@ export class VoiceOrchestrator {
     this.killSwitch = opts.killSwitch;
     this.audit = opts.audit;
     this.onCameraQuery = opts.onCameraQuery;
+    this.rewindHandler = opts.rewindHandler;
+    this.rewindSurface = opts.rewindSurface;
     this.userName = opts.userName;
+    this.conversationIntent = opts.conversationIntent;
   }
 
   async start(): Promise<void> {
@@ -201,8 +241,7 @@ export class VoiceOrchestrator {
       }
 
       // Phase 9 — camera-query. Only engages when a nchindaLook handler
-      // has been supplied; otherwise the transcript falls through to the
-      // normal task pipeline below (preserves backward compatibility).
+      // has been supplied; otherwise the transcript falls through.
       if (intent.kind === "camera-query" && this.onCameraQuery) {
         this.sm.transition("thinking");
         this.bus.emit({
@@ -235,6 +274,38 @@ export class VoiceOrchestrator {
         this.sm.transition("idle");
         return;
       }
+
+      // Phase 15 — rewind queries short-circuit the task pipeline when a
+      // handler is wired. Rewind is a control intent, so we do NOT also
+      // fire the conv-intent side-channel.
+      if (intent.kind === "rewind" && this.rewindHandler) {
+        this.sm.transition("thinking");
+        let results: RewindResult[] = [];
+        try {
+          results = await this.rewindHandler.query(
+            intent.payload?.transcript ?? transcript,
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("[VoiceOrchestrator] rewind failed:", msg);
+        }
+        if (this.isStale(gen)) return;
+        this.rewindSurface?.present(results);
+        this.audit?.append({
+          action: "voice_intent",
+          detail: `intent=rewind hits=${results.length}`,
+          ts: new Date(),
+        });
+        const reply = buildRewindReply(results);
+        this.sm.transition("speaking");
+        await this.tts.speak(reply);
+        if (this.isStale(gen)) return;
+        this.sm.transition("idle");
+        return;
+      }
+
+      // 3.6. Phase 14 — fire-and-forget conversation-intent classification.
+      this.dispatchConversationIntent(transcript);
 
       // 4. Transition to thinking.
       this.sm.transition("thinking");
@@ -284,4 +355,59 @@ export class VoiceOrchestrator {
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
+  /**
+   * Fire-and-forget Phase 14 side-channel. The returned promise is stored on
+   * `this.lastConvIntentTask` solely so tests can await completion; it is
+   * never awaited by the voice pipeline.
+   */
+  private dispatchConversationIntent(transcript: string): void {
+    const conv = this.conversationIntent;
+    if (!conv) return;
+    this.lastConvIntentTask = (async () => {
+      try {
+        const intent = await conv.classify(transcript);
+        await conv.route(intent);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Isolate failures — this path must never break voice.
+        console.error("[VoiceOrchestrator] conv-intent dispatch failed:", msg);
+      }
+    })();
+  }
+
+  /** Test-only: await the most recent fire-and-forget conv-intent task. */
+  async _flushConversationIntentForTests(): Promise<void> {
+    await this.lastConvIntentTask;
+  }
+}
+
+/**
+ * Compose a short spoken reply for a rewind query. We voice only the
+ * top-1 hit's label (plus captured_at context); the full list lives in
+ * the Pending Surface so the user can click through to the WebP.
+ */
+function buildRewindReply(results: RewindResult[]): string {
+  if (results.length === 0) {
+    return "I couldn't find anything matching that.";
+  }
+  const top = results[0]!;
+  const label = top.label && top.label.trim() ? top.label : "that memory";
+  const when = friendlyWhen(top.captured_at);
+  const hits =
+    results.length > 1 ? ` I found ${results.length} possible matches.` : "";
+  return `${label}, from ${when}.${hits}`;
+}
+
+function friendlyWhen(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "earlier";
+  const delta = Date.now() - t;
+  const min = Math.floor(delta / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }

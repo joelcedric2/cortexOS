@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "PackageStructure": ["<PackageStructure>"]
+  "cortexos-vision-arm64-apple-macosx26.0-debug.exe": ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe>"]
+  "cortexos-vision-arm64-apple-macosx26.0-debug.module": ["<cortexos-vision-arm64-apple-macosx26.0-debug.module>"]
+  "main": ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe>","<cortexos-vision-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe>","<cortexos-vision-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision":
+    is-mutated: true
+commands:
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision-entitlement.plist"]
+    description: "Write auxiliary file /Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision-entitlement.plist"
+
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swift.o"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision.product/Objects.LinkFileList"
+
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/CaptureCommand.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/OCRCommand.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/VisionError.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/main.swift"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/sources"]
+    description: "Write auxiliary file /Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/sources"
+
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<cortexos-vision-arm64-apple-macosx26.0-debug.exe>":
+    tool: phony
+    inputs: ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
+    outputs: ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe>"]
+
+  "<cortexos-vision-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/Modules/cortexos_vision.swiftmodule"]
+    outputs: ["<cortexos-vision-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.cortexos-vision-arm64-apple-macosx26.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision.product/Objects.LinkFileList"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/cortexos-vision"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug","-o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision","-module-name","cortexos_vision","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_cortexos_vision_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-Xlinker","-add_ast_path","-Xlinker","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/Modules/cortexos_vision.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.cortexos-vision-arm64-apple-macosx26.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision-entitlement.plist"]
+    outputs: ["<cortexos-vision-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/cortexos-vision"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision-entitlement.plist","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos-vision"]
+
+  "C.cortexos-vision-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/CaptureCommand.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/OCRCommand.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/VisionError.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/main.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/sources"]
+    outputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swift.o","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/Modules/cortexos_vision.swiftmodule"]
+    description: "Compiling Swift Module 'cortexos_vision' (4 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","cortexos_vision","-emit-dependencies","-emit-module","-emit-module-path","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/Modules/cortexos_vision.swiftmodule","-output-file-map","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/output-file-map.json","-incremental","-c","@/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/sources","-I","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","cortexos_vision_main","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","cortexos_vision"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Package.swift","/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

@@ -6,6 +6,7 @@
 //   camera-capture  --out <path> [--device front|back|continuity]
 //   input           click|double-click|move|type|scroll|screenshot
 //   ax              find|findAll
+//   ax-watch        --app <bundle-id> [--text-role]
 //
 // All results emitted as a single JSON object to stdout. Errors go to stderr
 // and the process exits with a non-zero status. When the user has not granted
@@ -37,6 +38,8 @@ struct CortexOSVision {
                 try await InputCommand.run(args: rest)
             case "ax":
                 try await AXCommand.run(args: rest)
+            case "ax-watch":
+                try await AXWatchCommand.run(args: rest)
             case "--help", "-h", "help":
                 printUsage()
             default:
@@ -69,6 +72,7 @@ struct CortexOSVision {
           cortexos-vision input screenshot   [--out <path>]
           cortexos-vision ax find            --role <role> [--label <str>] [--app <bundleId>]
           cortexos-vision ax findAll         --role <role> [--app <bundleId>]
+          cortexos-vision ax-watch           --app <bundle-id> [--text-role]
 
         Exit codes:
           0  success

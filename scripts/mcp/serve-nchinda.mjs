@@ -7,7 +7,7 @@
  * Tools exposed:
  *   nchinda_recall, nchinda_remember, nchinda_schedule, nchinda_research,
  *   nchinda_send, nchinda_broadcast, nchinda_status, nchinda_escalate,
- *   nchinda_ask_peer
+ *   nchinda_ask_peer, nchinda_see, nchinda_rewind, watch_draft
  */
 
 import { createInterface } from "node:readline";
@@ -129,6 +129,22 @@ async function dispatch(name, args, tools) {
       // Phase 9 — strictly on-demand. No runtime-shared camera; each
       // call opens the AVFoundation session once and closes it.
       return await nchindaLook(args ?? {}, {});
+    }
+    case "nchinda_rewind": {
+      const { nchindaRewind } = await import("../../dist/mcp/nchinda-rewind.js");
+      const { ScreenMemoriesDB } = await import("../../dist/perception/screen-memories-db.js");
+      // Runtime-shared instances (Orchestrator wires these); fall back to a
+      // fresh DB connection against the shared registry when absent. The
+      // embedder MUST be shared so int8-quantization / dim matches the
+      // screen-memories store.
+      const db = runtime.screenMemoriesDb ?? new ScreenMemoriesDB();
+      const rewindEmbedder = runtime.rewindEmbedder;
+      if (!rewindEmbedder) {
+        throw new Error(
+          "nchinda_rewind: runtime.rewindEmbedder must be wired (int8 embedding Buffer)",
+        );
+      }
+      return await nchindaRewind(args ?? {}, { db, embedder: rewindEmbedder });
     }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
@@ -283,13 +299,6 @@ async function dispatch(name, args, tools) {
         mail,
         messages,
         calendar,
-        // Adapter: `coordination.escalate` currently returns only
-        // `{ escalation_id }` and fires an event-bus question the
-        // user answers asynchronously. Until the synchronous-confirm
-        // plumbing lands, the raised escalation_id is treated as
-        // approval (preserves existing behaviour). `runtime
-        // .commsEscalator` is the seam where production wiring will
-        // inject a blocking confirm path.
         escalate: runtime.commsEscalator ?? (async (a) => {
           const r = await tools.coordination.escalate(a);
           return { approved: true, escalation_id: r.escalation_id };
@@ -325,9 +334,6 @@ async function dispatch(name, args, tools) {
       const { createActuator } = await import("../../dist/computer-use/actuator.js");
       const { Policy } = await import("../../dist/loop/policy.js");
       const actuator = runtime.actuator ?? createActuator({ audit: runtime.audit });
-      // Policy gate at the MCP boundary — protects against a
-      // prompt-injected planner bypassing the agent-loop's policy
-      // check by speaking MCP directly.
       const cuPolicy = runtime.cuPolicy ?? new Policy();
       const cuGate = runtime.cuEscalationGate ?? {
         requestConfirmation: async (question) => {
@@ -335,10 +341,6 @@ async function dispatch(name, args, tools) {
             question,
             level: "question",
           });
-          // Until blocking-confirm is wired, default to approved so
-          // existing agent-loop flows don't regress. Production
-          // wiring MUST inject `runtime.cuEscalationGate` with real
-          // confirm semantics.
           return true;
         },
       };
@@ -350,6 +352,16 @@ async function dispatch(name, args, tools) {
       if (name === "cu_screenshot") return await cu.screenshot(args);
       if (name === "cu_find_element") return await cu.findElement(args);
       return await cu.scroll(args);
+    }
+    // ─── Phase 13 writing-coach tools ───
+    case "watch_draft": {
+      const { watchDraft, InMemoryWatchDraftController } = await import(
+        "../../dist/mcp/watch-draft-tool.js"
+      );
+      if (!runtime.watchDraftController) {
+        runtime.watchDraftController = new InMemoryWatchDraftController();
+      }
+      return await watchDraft(args, { controller: runtime.watchDraftController });
     }
     default: {
       const err = new Error(`unknown tool: ${name}`);
