@@ -45,6 +45,8 @@ import { AgentRegistry } from "../registry/agent-registry.js";
 import { EscalationsDB } from "../mcp/escalations-db.js";
 import { SkillRegistryDB } from "../skills/skill-registry-db.js";
 import { AuditLog } from "../proactivity/audit.js";
+import { WorktreeManager } from "../workspace/worktree-manager.js";
+import { homedir } from "node:os";
 
 export interface CortexConfig {
   sessionName: string;
@@ -96,6 +98,7 @@ export class CortexController {
   private escalationsDb: EscalationsDB | null = null;
   private skillRegistryDb: SkillRegistryDB | null = null;
   private auditLog: AuditLog | null = null;
+  private worktreeManager: WorktreeManager | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -256,6 +259,26 @@ export class CortexController {
       }
     }
 
+    // Phase 3 DoD (Nchinda §6): mandatory git-worktree allocation per agent.
+    // Back-compat: CORTEXOS_WORKTREE=off skips allocation for callers that
+    // still want the legacy .cortexos-agents/<session> layout.
+    if (process.env.CORTEXOS_WORKTREE !== "off") {
+      try {
+        this.worktreeManager = new WorktreeManager({
+          rootDir: join(homedir(), ".cortexos", "workspaces"),
+        });
+        console.log(
+          "[CortexOS] WorktreeManager active (CORTEXOS_WORKTREE=off to disable)",
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] WorktreeManager init failed: ${message}`);
+        this.worktreeManager = null;
+      }
+    } else {
+      console.log("[CortexOS] WorktreeManager disabled (CORTEXOS_WORKTREE=off)");
+    }
+
     this.initialized = true;
     console.log("[CortexOS] Initialized — pgvector connected, embedder loaded");
   }
@@ -315,6 +338,15 @@ export class CortexController {
   /** UI HTTP API on port 3103. Null unless CORTEXOS_UI=on on init. */
   getUIApi(): UIApiServer | null {
     return this.uiApi;
+  }
+
+  /**
+   * WorktreeManager — allocates isolated git worktrees per spawned agent.
+   * Null only when CORTEXOS_WORKTREE=off explicitly disables it (Phase 3
+   * DoD defaults to ON).
+   */
+  getWorktreeManager(): WorktreeManager | null {
+    return this.worktreeManager;
   }
 
   async handleIpcRequest(req: IpcRequest): Promise<IpcResponse> {

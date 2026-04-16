@@ -94,9 +94,14 @@ program
     const { TmuxManager } = await import("./tmux/tmux-manager.js");
     // Inject the controller's shared EventBus so the orchestrator sees
     // Claude Code Stop/PreCompact hook events posted to the HTTP hooks server.
+    // Phase 3 DoD: worktree allocator is mandatory. Controller owns the
+    // singleton; pass it through so every Plan-spawned executor gets an
+    // isolated agent/<agentId> branch. Null only when CORTEXOS_WORKTREE=off.
+    const worktreeManager = cortex.getWorktreeManager();
     const orchestrator = new Orchestrator(cortex, new TmuxManager(), {
       bus: cortex.getBus(),
       briefStore: cortex.getBriefStore(),
+      ...(worktreeManager ? { worktreeManager } : {}),
     });
 
     await orchestrator.execute(task);
