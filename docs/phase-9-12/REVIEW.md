@@ -9,17 +9,40 @@
 
 ## Verdict
 
-**TBD** — skeleton committed; sections below filled in as the branches are walked.
+**Ship-with-fixes** — blocking main-merge until P12a's escalation truly gates and
+the `cu_*` MCP surface either inherits agent-loop's policy gate or gets its own.
+
+Phase 9 (camera) is the strongest of the four branches: the "one-shot" invariant
+is enforced in three places (Swift session stop+teardown in `defer`, no ring
+buffer in TS, no shared runtime handle in `serve-nchinda.mjs`), Continuity
+Camera detection cleanly straddles macOS 13/14, the permission-denied path is
+typed end-to-end, and the voice `camera-query` branch is purely additive (kill
+path untouched). Phase 10 is well-layered (Actuator bounds-check + cap, loop
+policy gate fires before actuate, bounded by steps AND time) but leaks raw
+`cu_*` MCP tools without policy mediation, which defeats the whole Phase 2.2
+irreversibility story when the planner speaks MCP directly. Phase 12a has
+excellent `quoteAS` discipline + arg-array `osascript` invocations, but its
+self-admitted "best-effort notification, gating is 12b scope" escalation is a
+spec-drift violation of VISION §4 Phase 12 point 3 ("All send/compose flows
+trigger escalation confirmation **before firing**"). Phase 12b's Finder
+sanitizePath is the most careful piece of code in the whole review (dot-dot
+rejection both raw and resolved, realpath-based containment, NUL screen,
+symlink-escape catch), and notes/reminders wire a real `EscalationGate` with
+boolean confirmation — exactly the contract P12a punted on. The integration
+branch `phase9-12/integration` (T1) currently holds only the P12b diff; P9,
+P10, P12a are not yet merged in, so integration-level concerns (duplicate
+`quoteAS`, shared audit action vocabulary, `serve-nchinda.mjs` case-dispatch
+collisions, tool-schema.ts conflicts) are real but not yet observed.
 
 ## 1. Scorecard (1–5, 5 = excellent)
 
 | Branch                     | Correctness | Security | TS Rigor | Test Quality | Design | Spec Adherence |
 | -------------------------- | ----------- | -------- | -------- | ------------ | ------ | -------------- |
-| phase9/camera              | –           | –        | –        | –            | –      | –              |
-| phase10/computer-use       | –           | –        | –        | –            | –      | –              |
-| phase12a/comms-drivers     | –           | –        | –        | –            | –      | –              |
-| phase12b/content-drivers   | –           | –        | –        | –            | –      | –              |
-| phase9-12/integration (T1) | –           | –        | –        | –            | –      | –              |
+| phase9/camera              | 5           | 5        | 5        | 4            | 5      | 5              |
+| phase10/computer-use       | 4           | 3        | 5        | 4            | 4      | 3              |
+| phase12a/comms-drivers     | 4           | 4        | 4        | 4            | 4      | 2              |
+| phase12b/content-drivers   | 5           | 5        | 4        | 4            | 4      | 5              |
+| phase9-12/integration (T1) | n/a         | n/a      | n/a      | n/a          | n/a    | n/a (empty)    |
 
 ## 2. Per-branch spec drift (vs VISION.md §4)
 
