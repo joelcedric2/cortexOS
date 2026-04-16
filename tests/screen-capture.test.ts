@@ -116,8 +116,11 @@ describe("ScreenCapturer", () => {
     const cap = new ScreenCapturer({ storageDir, bridge, scheduler });
 
     assert.equal(cap.isRunning(), false);
-    const f = await cap.captureNow();
+    const outcome = await cap.captureNow();
     assert.equal(cap.isRunning(), false, "captureNow must not start the loop");
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) throw new Error("unreachable");
+    const f = outcome.frame;
     assert.equal(typeof f.id, "string");
     assert.equal(f.width, 1920);
     assert.equal(f.active_app, "Ghostty");
@@ -129,11 +132,14 @@ describe("ScreenCapturer", () => {
   test("start / stop are idempotent", async () => {
     const bridge = fakeBridge({ captures: [frame()], cursor: 0 });
     const scheduler = manualScheduler();
+    // A2: intervalSec replaced by startFps — 0.2 fps ≡ 5 s interval.
     const cap = new ScreenCapturer({
       storageDir,
       bridge,
       scheduler,
-      intervalSec: 5,
+      startFps: 0.2,
+      minFps: 0.2,
+      maxFps: 0.2,
     });
 
     await cap.start();
@@ -334,7 +340,9 @@ describe("ScreenCapturer", () => {
   });
 
   test("invalid constructor options throw", () => {
-    assert.throws(() => new ScreenCapturer({ intervalSec: 0 }), /intervalSec/);
+    // A2 replaced intervalSec with startFps; the invariant we keep is
+    // "invalid rate/ring-buffer config throws loud".
+    assert.throws(() => new ScreenCapturer({ minFps: 0 }), /minFps/);
     assert.throws(
       () => new ScreenCapturer({ ringBufferSize: 0 }),
       /ringBufferSize/,

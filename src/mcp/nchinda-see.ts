@@ -60,9 +60,19 @@ export async function nchindaSee(
   deps: NchindaSeeDeps,
 ): Promise<VisionBrief> {
   const input = NchindaSeeInputSchema.parse(raw ?? {});
-  const frame = await deps.capturer.captureNow();
+  const outcome = await deps.capturer.captureNow();
+  if (!outcome.ok) {
+    // One-shot user-facing tool — budget/duplicate outcomes surface as
+    // explicit errors so the MCP transport can return a JSON-RPC error.
+    if (outcome.reason === "budget-exceeded") {
+      throw new Error(
+        `nchinda_see: capture budget exceeded (bytes_in_window=${outcome.bytesInWindow}, budget=${outcome.budget})`,
+      );
+    }
+    throw new Error(`nchinda_see: capture skipped (reason=${outcome.reason})`);
+  }
   return deps.brief(
-    frame,
+    outcome.frame,
     {},
     {
       mode: input.mode,

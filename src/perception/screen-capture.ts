@@ -1,64 +1,95 @@
 /**
- * Phase 8 — screen-capture loop + ring buffer.
+ * Phase 8 + 8.5 — screen-capture loop with adaptive rate + daily budget.
  *
  * Owns the periodic ScreenCaptureKit sampling, the bounded in-memory ring
- * buffer of recent frames, the on-disk PNG store (purged on eviction), and
- * the private-app allowlist that skips capture for sensitive windows.
+ * buffer, on-disk PNG store, private-app allowlist, perceptual-hash dedup,
+ * and the 24 h disk-bytes budget gate.
  *
- * Privacy invariants (plan §7):
- *   1. Starts disabled. Caller must explicitly `start()`.
- *   2. `forceOff()` is the ⌘⇧Esc kill-switch — stops the loop and wipes disk.
- *   3. Frames never leave this module. No fetch / https anywhere.
- *   4. Private-app allowlist skips the tick entirely (no capture, no OCR).
- *
- * Test seam: a `VisionBridge` is injected via constructor. Tests pass a fake
- * bridge; production code calls `createNativeBridge()` in `native-bridge.ts`.
+ * Privacy invariants (plan §7): starts disabled; `forceOff()` is the
+ * ⌘⇧Esc kill-switch; frames never leave this module; private-app bundles
+ * are never sampled. See `docs/phase-8.5/DECISIONS.md` for tuning notes.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { AgentEvent, EventBus } from "../ipc/event-bus.js";
+import type { ScreenMemoriesStore } from "./screen-memories-db.js";
 import {
   createNativeBridge,
   type NativeCaptureResult,
   type VisionBridge,
 } from "./native-bridge.js";
+import {
+  computePhash,
+  isDuplicate as phashIsDuplicate,
+  type PhashDecoder,
+} from "./phash.js";
 
-/** A single captured screen frame held in the ring buffer. */
+/** Plan §7.0 — every numeric knob is options-tunable. No inline literals below. */
+export const CAPTURE_DEFAULTS = {
+  START_FPS: 1.0,
+  MIN_FPS: 0.25,
+  MAX_FPS: 5.0,
+  RING_BUFFER_SIZE: 60,
+  DEDUP_WINDOW_SEC: 60,
+  DEDUP_WINDOW_MIN_SAMPLES: 6,
+  DEDUP_RATE_UPSCALE_HI: 0.8, // > this → halve fps
+  DEDUP_RATE_DOWNSCALE_LO: 0.4, // < this → double fps
+  DEDUP_MAX_HAMMING: 4,
+  /** 400 MB (decimal) — matches the Phase 8.5 spec ("400 MB"). */
+  CAPTURE_BUDGET_DAILY_BYTES: 400 * 1_000_000,
+  BUDGET_WINDOW_MS: 24 * 60 * 60 * 1000,
+} as const;
+
 export interface ScreenFrame {
-  /** Stable UUID — used as cross-ref key by the vision-brief / sensor. */
   id: string;
   ts: Date;
-  /** Absolute path to the on-disk PNG. Deleted when the frame is evicted. */
   png_path: string;
   active_app: string | null;
   window_title: string | null;
-  /** Populated lazily by the brief pipeline (Coder 2's lane). */
   ocr_text?: string;
   width: number;
   height: number;
+  phash?: bigint;
+}
+
+export type CaptureOutcome =
+  | { ok: true; frame: ScreenFrame }
+  | { ok: false; reason: "duplicate"; phash: bigint }
+  | { ok: false; reason: "budget-exceeded"; bytesInWindow: number; budget: number };
+
+export interface PendingSurface {
+  add(observation: {
+    sensorName: string;
+    observation: string;
+    urgency: number;
+    data?: Record<string, unknown>;
+  }): void | Promise<void>;
 }
 
 export interface ScreenCaptureOptions {
-  /** Sampling interval in seconds. Default 10 (≈0.1 Hz). */
-  intervalSec?: number;
-  /** Max frames kept in memory + on disk. Default 60 (~10 min). */
+  startFps?: number;
+  minFps?: number;
+  maxFps?: number;
   ringBufferSize?: number;
-  /** PNG storage directory. Default ~/.cortexos/screens/. */
   storageDir?: string;
-  /** Bundle ids to NEVER capture. Defaults to the standard sensitive set. */
   privateAppAllowlist?: string[];
-  /**
-   * Injected native bridge. Tests pass a fake. Production omits this and
-   * `createNativeBridge()` is used.
-   */
+  dedupWindowSec?: number;
+  dedupRateUpscaleHi?: number;
+  dedupRateDownscaleLo?: number;
+  dedupMaxHamming?: number;
+  captureBudgetDailyBytes?: number;
+  db?: ScreenMemoriesStore;
+  bus?: EventBus;
+  pendingSurface?: PendingSurface;
+  phashDecoder?: PhashDecoder;
   bridge?: VisionBridge;
-  /** Override the timer for deterministic tests. */
   scheduler?: CaptureScheduler;
+  now?: () => number;
 }
 
-/** Minimal scheduler contract — tests swap this for a manual driver. */
 export interface CaptureScheduler {
   start(intervalMs: number, tick: () => Promise<void> | void): void;
   stop(): void;
@@ -78,7 +109,7 @@ function defaultScheduler(): CaptureScheduler {
     start(intervalMs, tick) {
       handle = setInterval(() => {
         void Promise.resolve(tick()).catch(() => {
-          /* swallow — tick logs internally */
+          /* tick logs internally */
         });
       }, intervalMs);
       if (typeof handle.unref === "function") handle.unref();
@@ -94,30 +125,54 @@ function defaultStorageDir(): string {
   return join(homedir(), ".cortexos", "screens");
 }
 
-/**
- * ScreenCapturer — opt-in periodic screen sampler with ring-buffer GC.
- *
- * The class owns no mutable global state. Multiple instances are safe.
- */
+interface DedupSample {
+  t: number;
+  duplicate: boolean;
+}
+
+/** Opt-in periodic screen sampler with adaptive fps + budget gate. */
 export class ScreenCapturer {
-  private readonly intervalSec: number;
+  private readonly minFps: number;
+  private readonly maxFps: number;
   private readonly ringBufferSize: number;
   private readonly storageDir: string;
   private readonly privateApps: Set<string>;
   private readonly bridge: VisionBridge;
   private readonly scheduler: CaptureScheduler;
+  private readonly dedupWindowMs: number;
+  private readonly dedupRateUpscaleHi: number;
+  private readonly dedupRateDownscaleLo: number;
+  private readonly dedupMaxHamming: number;
+  private readonly captureBudgetDailyBytes: number;
+  private readonly budgetWindowMs = CAPTURE_DEFAULTS.BUDGET_WINDOW_MS;
+  private readonly db: ScreenMemoriesStore | null;
+  private readonly bus: EventBus | null;
+  private readonly pendingSurface: PendingSurface | null;
+  private readonly phashDecoder: PhashDecoder | undefined;
+  private readonly now: () => number;
 
+  private currentFps: number;
   private frames: ScreenFrame[] = [];
+  private dedupWindow: DedupSample[] = [];
+  private lastPhash: bigint | null = null;
   private running = false;
   private storageReady = false;
   private forced = false;
 
   constructor(opts: ScreenCaptureOptions = {}) {
-    this.intervalSec = opts.intervalSec ?? 10;
-    if (this.intervalSec <= 0) {
-      throw new Error("ScreenCapturer: intervalSec must be positive");
+    this.minFps = opts.minFps ?? CAPTURE_DEFAULTS.MIN_FPS;
+    this.maxFps = opts.maxFps ?? CAPTURE_DEFAULTS.MAX_FPS;
+    if (this.minFps <= 0) throw new Error("ScreenCapturer: minFps must be > 0");
+    if (this.maxFps < this.minFps) {
+      throw new Error("ScreenCapturer: maxFps must be >= minFps");
     }
-    this.ringBufferSize = opts.ringBufferSize ?? 60;
+    this.currentFps = clamp(
+      opts.startFps ?? CAPTURE_DEFAULTS.START_FPS,
+      this.minFps,
+      this.maxFps,
+    );
+
+    this.ringBufferSize = opts.ringBufferSize ?? CAPTURE_DEFAULTS.RING_BUFFER_SIZE;
     if (this.ringBufferSize < 1) {
       throw new Error("ScreenCapturer: ringBufferSize must be >= 1");
     }
@@ -125,60 +180,62 @@ export class ScreenCapturer {
     this.privateApps = new Set(opts.privateAppAllowlist ?? DEFAULT_PRIVATE_APPS);
     this.bridge = opts.bridge ?? createNativeBridge();
     this.scheduler = opts.scheduler ?? defaultScheduler();
+
+    this.dedupWindowMs =
+      (opts.dedupWindowSec ?? CAPTURE_DEFAULTS.DEDUP_WINDOW_SEC) * 1000;
+    this.dedupRateUpscaleHi =
+      opts.dedupRateUpscaleHi ?? CAPTURE_DEFAULTS.DEDUP_RATE_UPSCALE_HI;
+    this.dedupRateDownscaleLo =
+      opts.dedupRateDownscaleLo ?? CAPTURE_DEFAULTS.DEDUP_RATE_DOWNSCALE_LO;
+    if (this.dedupRateUpscaleHi <= this.dedupRateDownscaleLo) {
+      throw new Error(
+        "ScreenCapturer: dedupRateUpscaleHi must be > dedupRateDownscaleLo",
+      );
+    }
+    this.dedupMaxHamming = opts.dedupMaxHamming ?? CAPTURE_DEFAULTS.DEDUP_MAX_HAMMING;
+    this.captureBudgetDailyBytes =
+      opts.captureBudgetDailyBytes ?? CAPTURE_DEFAULTS.CAPTURE_BUDGET_DAILY_BYTES;
+
+    this.db = opts.db ?? null;
+    this.bus = opts.bus ?? null;
+    this.pendingSurface = opts.pendingSurface ?? null;
+    this.phashDecoder = opts.phashDecoder;
+    this.now = opts.now ?? (() => Date.now());
   }
 
-  /** Begin the capture loop. Idempotent — a second call is a no-op. */
   async start(): Promise<void> {
-    if (this.forced) {
-      throw new Error("ScreenCapturer: kill-switch active. Create a new instance.");
-    }
+    this.assertLive();
     if (this.running) return;
     await this.ensureStorage();
     this.running = true;
-    this.scheduler.start(this.intervalSec * 1000, () => this.tick());
+    this.scheduler.start(this.intervalMs(), () => this.tick());
   }
 
-  /** Stop the capture loop. Idempotent. Does not delete on-disk frames. */
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
     this.scheduler.stop();
   }
 
-  /**
-   * Capture a single frame right now. Works even when the loop is disabled,
-   * as required by the spec (used by the `nchinda_see` MCP tool).
-   *
-   * Respects the private-app allowlist — if the active app is sensitive the
-   * method throws `PrivateAppSkippedError` so callers can decide what to do.
-   */
-  async captureNow(): Promise<ScreenFrame> {
-    if (this.forced) {
-      throw new Error("ScreenCapturer: kill-switch active. Create a new instance.");
-    }
+  async captureNow(): Promise<CaptureOutcome> {
+    this.assertLive();
     await this.ensureStorage();
     return await this.doCapture();
   }
 
-  /** Most-recent frame first. */
   getRecent(n?: number): ScreenFrame[] {
     const count = n === undefined ? this.frames.length : Math.max(0, n);
-    const slice = this.frames.slice(-count);
-    return slice.slice().reverse();
+    return this.frames.slice(-count).slice().reverse();
   }
 
-  /**
-   * Delete frames older than `olderThanSec`. Returns the number removed.
-   * When called with no arg, purges ALL frames (used by the kill-switch).
-   */
   async purge(olderThanSec?: number): Promise<number> {
-    let keep: ScreenFrame[];
     let drop: ScreenFrame[];
+    let keep: ScreenFrame[];
     if (olderThanSec === undefined) {
       drop = this.frames;
       keep = [];
     } else {
-      const cutoff = Date.now() - olderThanSec * 1000;
+      const cutoff = this.now() - olderThanSec * 1000;
       drop = this.frames.filter((f) => f.ts.getTime() < cutoff);
       keep = this.frames.filter((f) => f.ts.getTime() >= cutoff);
     }
@@ -187,21 +244,30 @@ export class ScreenCapturer {
     return drop.length;
   }
 
-  isRunning(): boolean {
-    return this.running;
-  }
+  isRunning(): boolean { return this.running; }
+  currentIntervalMs(): number { return this.intervalMs(); }
+  getCurrentFps(): number { return this.currentFps; }
 
-  /**
-   * Global kill-switch. Stops the loop, purges all in-memory + on-disk frames,
-   * and latches the instance so further start()/captureNow() calls throw.
-   */
+  /** Kill-switch: stop + wipe + latch. */
   async forceOff(): Promise<void> {
     this.forced = true;
     await this.stop();
     await this.purge();
   }
 
-  // ─── Internals ────────────────────────────────────────────────────────
+  // ─── Internals ────────────────────────────────────────────────────────────
+
+  private assertLive(): void {
+    if (this.forced) {
+      throw new Error(
+        "ScreenCapturer: kill-switch active. Create a new instance.",
+      );
+    }
+  }
+
+  private intervalMs(): number {
+    return Math.max(1, Math.round(1000 / this.currentFps));
+  }
 
   private async ensureStorage(): Promise<void> {
     if (this.storageReady) return;
@@ -211,37 +277,152 @@ export class ScreenCapturer {
 
   private async tick(): Promise<void> {
     if (!this.running || this.forced) return;
+    const fpsBefore = this.currentFps;
     try {
       await this.doCapture();
     } catch (err) {
-      // Private-app skips are expected — count them without noise.
       if (err instanceof PrivateAppSkippedError) return;
-      // Anything else: log once. The loop keeps running; next tick may succeed.
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[screen-capture] tick failed: ${msg}`);
+    } finally {
+      this.maybeAdaptFps(fpsBefore);
     }
   }
 
-  private async doCapture(): Promise<ScreenFrame> {
+  private async doCapture(): Promise<CaptureOutcome> {
     const id = randomUUID();
     const pngPath = join(this.storageDir, `${id}.png`);
     const raw = await this.bridge.capture({ outPath: pngPath });
 
     if (this.isPrivateBundle(raw.active_bundle)) {
-      // Skip — remove anything the helper may have written.
       await tryUnlink(pngPath);
       throw new PrivateAppSkippedError(raw.active_bundle);
     }
 
-    const frame = toFrame(id, pngPath, raw);
+    if (this.db) {
+      const since = new Date(this.now() - this.budgetWindowMs);
+      const used = this.db.bytesInWindow(since);
+      if (used >= this.captureBudgetDailyBytes) {
+        await tryUnlink(pngPath);
+        await this.surfaceBudgetExceeded(used);
+        return {
+          ok: false,
+          reason: "budget-exceeded",
+          bytesInWindow: used,
+          budget: this.captureBudgetDailyBytes,
+        };
+      }
+    }
+
+    const phash = await this.tryPhash(pngPath);
+    if (
+      phash !== null &&
+      this.lastPhash !== null &&
+      phashIsDuplicate(this.lastPhash, phash, this.dedupMaxHamming)
+    ) {
+      await tryUnlink(pngPath);
+      this.recordDedup(true);
+      return { ok: false, reason: "duplicate", phash };
+    }
+    if (phash !== null) this.lastPhash = phash;
+    this.recordDedup(false);
+
+    const frame = toFrame(id, pngPath, raw, phash ?? undefined);
     this.frames.push(frame);
     await this.evictOverflow();
-    return frame;
+
+    if (this.db && phash !== null) {
+      try {
+        this.db.insert({
+          id: frame.id,
+          captured_at: frame.ts,
+          webp_path: null,
+          phash,
+          active_app: frame.active_app,
+          window_title: frame.window_title,
+          ocr_text_zstd: null,
+          label: null,
+          embedding: Buffer.alloc(0),
+          task_id: null,
+          session_id: null,
+          bytes: 0,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[screen-capture] db.insert failed: ${msg}`);
+      }
+    }
+
+    return { ok: true, frame };
+  }
+
+  private async tryPhash(pngPath: string): Promise<bigint | null> {
+    try {
+      return await computePhash(pngPath, { decoder: this.phashDecoder });
+    } catch {
+      return null;
+    }
+  }
+
+  private recordDedup(duplicate: boolean): void {
+    const t = this.now();
+    this.dedupWindow.push({ t, duplicate });
+    const cutoff = t - this.dedupWindowMs;
+    while (this.dedupWindow.length > 0 && this.dedupWindow[0]!.t < cutoff) {
+      this.dedupWindow.shift();
+    }
+  }
+
+  private dedupRate(): { rate: number; samples: number } {
+    const samples = this.dedupWindow.length;
+    if (samples === 0) return { rate: 0, samples: 0 };
+    let dups = 0;
+    for (const s of this.dedupWindow) if (s.duplicate) dups += 1;
+    return { rate: dups / samples, samples };
+  }
+
+  private maybeAdaptFps(fpsBefore: number): void {
+    const { rate, samples } = this.dedupRate();
+    if (samples < CAPTURE_DEFAULTS.DEDUP_WINDOW_MIN_SAMPLES) return;
+
+    let next = this.currentFps;
+    if (rate > this.dedupRateUpscaleHi) {
+      next = Math.max(this.minFps, this.currentFps / 2);
+    } else if (rate < this.dedupRateDownscaleLo) {
+      next = Math.min(this.maxFps, this.currentFps * 2);
+    }
+
+    if (next !== fpsBefore) {
+      this.currentFps = next;
+      if (this.running) {
+        this.scheduler.stop();
+        this.scheduler.start(this.intervalMs(), () => this.tick());
+      }
+    }
+  }
+
+  private async surfaceBudgetExceeded(used: number): Promise<void> {
+    const data = { bytes_in_window: used, budget: this.captureBudgetDailyBytes };
+    const ev: AgentEvent = {
+      kind: "error",
+      payload: { where: "capture.budget", ...data },
+      ts: new Date(this.now()),
+    };
+    try { this.bus?.emit(ev); } catch (err) { warnOp("bus.emit", err); }
+    if (!this.pendingSurface) return;
+    try {
+      await this.pendingSurface.add({
+        sensorName: "screen-capture",
+        observation:
+          "Nchinda hit its screen-capture budget for today. Raise the limit or clear old frames?",
+        urgency: 0.6,
+        data,
+      });
+    } catch (err) { warnOp("pendingSurface.add", err); }
   }
 
   private isPrivateBundle(bundle: string | null | undefined): boolean {
-    if (!bundle) return false;
-    return this.privateApps.has(bundle);
+    return bundle ? this.privateApps.has(bundle) : false;
   }
 
   private async evictOverflow(): Promise<void> {
@@ -252,7 +433,11 @@ export class ScreenCapturer {
   }
 }
 
-/** Raised when the active app is on the private allowlist. */
+function warnOp(op: string, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.warn(`[screen-capture] ${op} failed: ${msg}`);
+}
+
 export class PrivateAppSkippedError extends Error {
   constructor(public readonly bundleId: string) {
     super(`capture skipped: ${bundleId} is on the private-app allowlist`);
@@ -260,9 +445,14 @@ export class PrivateAppSkippedError extends Error {
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-function toFrame(id: string, pngPath: string, raw: NativeCaptureResult): ScreenFrame {
+function toFrame(
+  id: string,
+  pngPath: string,
+  raw: NativeCaptureResult,
+  phash?: bigint,
+): ScreenFrame {
   return {
     id,
     ts: new Date(raw.ts || Date.now()),
@@ -271,6 +461,7 @@ function toFrame(id: string, pngPath: string, raw: NativeCaptureResult): ScreenF
     window_title: raw.window_title || null,
     width: raw.width,
     height: raw.height,
+    phash,
   };
 }
 
@@ -280,13 +471,17 @@ async function tryUnlink(p: string): Promise<void> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return;
-    // Surface non-ENOENT failures so a leaky disk shows up in logs.
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`[screen-capture] unlink ${p} failed: ${msg}`);
   }
 }
 
-/** Convenience: a default storage dir under tmp for throwaway instances. */
+function clamp(v: number, lo: number, hi: number): number {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
 export function ephemeralStorageDir(): string {
   return join(tmpdir(), `cortexos-screens-${randomUUID()}`);
 }

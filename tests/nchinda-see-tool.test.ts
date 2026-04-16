@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { nchindaSee } from "../src/mcp/nchinda-see.js";
 import { NCHINDA_SEE_SCHEMA, NCHINDA_TOOL_SCHEMAS } from "../src/mcp/tool-schema.js";
 import { buildBrief } from "../src/perception/vision-brief.js";
-import type { ScreenCapturer, ScreenFrame } from "../src/perception/screen-capture.js";
+import type {
+  CaptureOutcome,
+  ScreenCapturer,
+  ScreenFrame,
+} from "../src/perception/screen-capture.js";
 
 function makeFrame(overrides: Partial<ScreenFrame> = {}): ScreenFrame {
   return {
@@ -24,11 +28,11 @@ class FakeCapturer implements ScreenCapturer {
   constructor(frames: ScreenFrame[] = []) {
     this.queued = [...frames];
   }
-  async captureNow(): Promise<ScreenFrame> {
+  async captureNow(): Promise<CaptureOutcome> {
     this.captures++;
     const f = this.queued.shift();
     if (!f) throw new Error("FakeCapturer: no frames queued");
-    return f;
+    return { ok: true, frame: f };
   }
   getRecent(): ScreenFrame[] {
     return [];
@@ -119,7 +123,7 @@ describe("nchinda_see — MCP tool", () => {
 
   test("capture failure propagates as an error (no silent catch)", async () => {
     const cap: ScreenCapturer = {
-      async captureNow() {
+      async captureNow(): Promise<CaptureOutcome> {
         throw new Error("permission-denied");
       },
       getRecent() {

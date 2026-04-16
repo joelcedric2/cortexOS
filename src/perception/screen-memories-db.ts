@@ -97,6 +97,19 @@ export interface ScreenMemoriesDBOptions {
   dbPath?: string;
 }
 
+/**
+ * Structural contract consumed by the capture pipeline (adaptive fps /
+ * budget gate). Satisfied by `ScreenMemoriesDB`; tests can inject any
+ * object that implements these two methods.
+ *
+ * Note: this used to live in `_a1-stub.ts` as a pre-integration seam; it is
+ * now co-located with the real implementation. No stub remains.
+ */
+export interface ScreenMemoriesStore {
+  insert(row: ScreenMemoryInput): ScreenMemoryRow;
+  bytesInWindow(since: Date): number;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_DB_DIR = join(homedir(), ".cortexos");
