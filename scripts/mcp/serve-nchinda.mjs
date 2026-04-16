@@ -129,11 +129,13 @@ async function dispatch(name, args, tools) {
     }
     case "skill_discover":
     case "skill_install":
-    case "skill_use": {
+    case "skill_use":
+    case "skill_create": {
       const { getSkillTools } = await import("../../dist/mcp/skill-tools-wiring.js");
       const st = await getSkillTools();
       if (name === "skill_discover") return await st.discover(args);
       if (name === "skill_install") return await st.install(args);
+      if (name === "skill_create") return await st.create(args);
       return await st.use(args);
     }
     default: {

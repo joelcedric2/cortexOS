@@ -11,7 +11,6 @@
  *   7. VALIDATE     — runSkill once as smoke test
  */
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

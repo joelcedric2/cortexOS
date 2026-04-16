@@ -376,6 +376,33 @@ export const SKILL_USE_SCHEMA: McpToolSchema = {
   },
 };
 
+export const SKILL_CREATE_SCHEMA: McpToolSchema = {
+  name: "skill_create",
+  description:
+    "Create a new skill from a natural-language description. Runs a 7-step flow: research → design SKILL.md → scaffold tests → implement → vet → register → validate. Returns the created skill's id, path, and test results.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      need: {
+        type: "string",
+        description: "Natural-language description of the capability to create.",
+        minLength: 1,
+      },
+      name: {
+        type: "string",
+        description: "Optional slug for the skill. Auto-derived from need if omitted.",
+      },
+      language: {
+        type: "string",
+        enum: ["typescript", "python", "shell"],
+        description: "Implementation language. Default: typescript.",
+      },
+    },
+    required: ["need"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -392,4 +419,5 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   SKILL_DISCOVER_SCHEMA,
   SKILL_INSTALL_SCHEMA,
   SKILL_USE_SCHEMA,
+  SKILL_CREATE_SCHEMA,
 ];
