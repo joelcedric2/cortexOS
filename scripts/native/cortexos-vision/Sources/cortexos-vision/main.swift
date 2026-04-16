@@ -4,6 +4,8 @@
 //   capture         [--app <bundle-id>] [--out <path>]
 //   ocr             --image <path>
 //   camera-capture  --out <path> [--device front|back|continuity]
+//   input           click|double-click|move|type|scroll|screenshot
+//   ax              find|findAll
 //
 // All results emitted as a single JSON object to stdout. Errors go to stderr
 // and the process exits with a non-zero status. When the user has not granted
@@ -31,6 +33,10 @@ struct CortexOSVision {
                 try await OCRCommand.run(args: rest)
             case "camera-capture":
                 try await CameraCommand.run(args: rest)
+            case "input":
+                try await InputCommand.run(args: rest)
+            case "ax":
+                try await AXCommand.run(args: rest)
             case "--help", "-h", "help":
                 printUsage()
             default:
@@ -49,18 +55,26 @@ struct CortexOSVision {
 
     private static func printUsage() {
         let usage = """
-        cortexos-vision — cortexOS Phase 8 perception helper
+        cortexos-vision — cortexOS Phase 8 perception + Phase 10 actuator helper
 
         Usage:
           cortexos-vision capture [--app <bundle-id>] [--out <path>]
           cortexos-vision ocr --image <path>
           cortexos-vision camera-capture --out <path> [--device front|back|continuity]
+          cortexos-vision input click        --x <n> --y <n> [--button left|right]
+          cortexos-vision input double-click --x <n> --y <n>
+          cortexos-vision input move         --x <n> --y <n>
+          cortexos-vision input type         --text <str> [--delay-ms <n>]
+          cortexos-vision input scroll       --x <n> --y <n> --dy <n> [--dx <n>]
+          cortexos-vision input screenshot   [--out <path>]
+          cortexos-vision ax find            --role <role> [--label <str>] [--app <bundleId>]
+          cortexos-vision ax findAll         --role <role> [--app <bundleId>]
 
         Exit codes:
           0  success
           1  generic error
           2  usage error
-          3  permission-denied (Screen Recording / Vision / Camera not granted)
+          3  permission-denied (Screen Recording / Vision / Camera / Accessibility not granted)
         """
         print(usage)
     }

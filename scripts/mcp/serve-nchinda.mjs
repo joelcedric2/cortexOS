@@ -305,6 +305,22 @@ async function dispatch(name, args, tools) {
       }
       return null;
     }
+    // ─── Phase 10 computer-use tools ───
+    case "cu_click":
+    case "cu_type":
+    case "cu_screenshot":
+    case "cu_find_element":
+    case "cu_scroll": {
+      const { CuTools } = await import("../../dist/mcp/cu-tools.js");
+      const { createActuator } = await import("../../dist/computer-use/actuator.js");
+      const actuator = runtime.actuator ?? createActuator({ audit: runtime.audit });
+      const cu = runtime.cuTools ?? new CuTools({ actuator });
+      if (name === "cu_click") return await cu.click(args);
+      if (name === "cu_type") return await cu.type(args);
+      if (name === "cu_screenshot") return await cu.screenshot(args);
+      if (name === "cu_find_element") return await cu.findElement(args);
+      return await cu.scroll(args);
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;

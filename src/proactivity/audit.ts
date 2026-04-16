@@ -30,6 +30,10 @@ import { homedir } from "node:os";
  *                           Music, Finder, Mail, Calendar, Messages) performed
  *                           a write (create/update/delete). Irreversible
  *                           mutations are gated behind an escalation first.
+ *
+ * Phase 10 adds computer-use actuation:
+ *   - cu_action          — an accessibility / actuator action (click, type,
+ *                           keypress) fired through the computer-use agent loop.
  */
 export type AuditAction =
   | "sensor_sample"
@@ -43,7 +47,8 @@ export type AuditAction =
   | "voice_intent"
   | "camera_capture"
   | "camera_llm"
-  | "app_mutation";
+  | "app_mutation"
+  | "cu_action";
 
 export interface AuditEntry {
   /** Action type — see {@link AuditAction}. */
