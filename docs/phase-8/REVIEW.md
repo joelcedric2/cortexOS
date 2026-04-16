@@ -186,11 +186,105 @@ the seven Phase 8 / five Phase 11 items in the plan.
 
 ## 4. Privacy pass (§7)
 
-_TBD — filled in commit #4._
+This is the section that carries the most weight, per the Tester 2 brief.
+The headline finding: **three of the four non-negotiable privacy invariants
+are not met today**, because the modules that would enforce them are missing
+from every committed branch.
+
+### 4.1 "No frames leave the Mac without explicit LLM action" (§7.2)
+
+- `grep -rn "fetch(\|https://\|axios\|node-fetch\|undici" src/perception/` → **0 matches** on C1 / `main`. ✅ for C1's primitives in isolation.
+- No `vision-brief.ts` on C2 → cannot verify end-to-end. The LLM call has to go somewhere; the spec pins it to a *single* egress point in `vision-brief.ts` + (future) `nchinda_see`, guarded by explicit consent.
+- **The test that must exist**: a unit test that instantiates `buildBrief(frame, {}, { mode: "local-only" })` with a sentinel `fetchImpl` spy and asserts `fetchImpl` is never called. Without this, a future contributor can add a network lookup (telemetry, caching, model-card fetch) and the invariant silently rots. Gating via `grep` in CI is a secondary but complementary signal.
+
+### 4.2 Private-app allowlist (§7.7)
+
+Spec requires "1Password, banking sites, disk-encryption fields — never sampled."
+
+- **No tracked file** contains `1Password`, `Keychain`, `FileVault`, `Bitwarden`, `Disk Utility`, or any `private-app` / `allowlist` keyword. Confirmed by `grep -rn -i "1password\|keychain\|filevault\|bitwarden\|private.app" src/` across `phase8/screen-capture` and `main`: 0 hits.
+- **Required shape** (minimum):
+  - Bundle-ID set (persuasive because it's harder to spoof than display names): at least `com.1password.1password`, `com.1password.onepassword7`, `com.agilebits.onepassword7`, `com.bitwarden.desktop`, `com.apple.keychainaccess`, `com.apple.DiskUtility`, `com.apple.systempreferences`, and a regex/set for `com.apple.Safari.*bank*` and common banking bundle IDs (Chase, BOA, Wells, Citi).
+  - Allowlist is checked *before* the Swift helper touches `SCShareableContent` OR the helper must accept `--deny-bundle-id <id>` and skip capture entirely (no PNG on disk) when the frontmost app matches. Current `CaptureCommand.swift:37` honors `--app <bundle-id>` as a positive filter only; there is no negative filter.
+  - Window-title fallback for Safari — because the active-app check will miss a banking tab inside Safari. Allowlist must be checked against `active_app + window_title` joined, with banking URL/title regex.
+- Until this is enforced structurally (not just documented), **a screenshot of 1Password WILL land on disk** if the sensor is turned on and 1Password is frontmost. Hard §7 violation.
+
+### 4.3 Kill-switch (§7.4)
+
+- Spec: "⌘⇧Escape globally disables all perception for the rest of the session."
+- Landed: **nothing**. No `forceOff()` method, no `KILL_SWITCH` flag, no hotkey registration in `src/ui/hotkey.ts` for `⌘⇧Esc`.
+- `src/controller/cortex.ts` does not hold a reference to any `ScreenCapturer`, so even if the capturer existed there's no wired path from a global hotkey to `capturer.forceOff()`.
+- **Required:** `ScreenCapturer.forceOff(): Promise<void>` that (a) stops the interval, (b) purges in-memory frame list, (c) `unlink`s every PNG in the storage dir, (d) latches the instance so further `start()`/`captureNow()` calls throw. Plus a UI hotkey wiring in `src/ui/hotkey.ts` bound to `cmd+shift+escape`, plus a persistent session flag in `~/.cortexos/session.json` honored across process restarts.
+
+### 4.4 Audit log (§7.5)
+
+- Spec: "every frame sample, every vision call, every actuator action — appended to `~/.cortexos/audit.ndjson`."
+- `src/proactivity/audit.ts` defines an `AuditLog` class with `append()` / `dailySummary()` + `~/.cortexos/audit.ndjson` default (`audit.ts:37-45`). ✅ The plumbing exists.
+- **No perception module calls it.** Grep `src/perception/` for `AuditLog|audit.ts|audit.append`: 0 hits. C1 code in `native-bridge.ts` does not log. `screen-capture.ts` doesn't exist to log. `vision-brief.ts` doesn't exist to log.
+- **Required:** Every `bridge.capture()`, `bridge.ocr()`, `buildBrief({ mode: "llm" })` call must append an event: `{ kind: "perception.capture"|"perception.ocr"|"perception.llm_vision", ts, bundle_id, png_sha256, bytes, success, duration_ms }`. No PNG *contents*, no OCR text, no LLM output — just the fact-of-capture, for user review.
+
+### 4.5 Visible state (§7.6)
+
+- Waveform eye icon / camera dot — UI wiring is missing but is Phase 8.5/UI scope; acceptable to defer. Flag as a **follow-up** (§9).
+
+### 4.6 Local OCR first (§7.3)
+
+- Swift helper has the Apple Vision path (`OCRCommand.swift`). ✅ primitive exists.
+- No caller chooses it yet because `vision-brief.ts` is absent. Whether the final implementation correctly prefers local OCR before any cloud path cannot be verified.
+
+### 4.7 Network-egress audit
+
+Grep matrix, scoped to files touched by Phase 8/11 on committed branches:
+
+| Pattern | `src/perception/native-bridge.ts` | `src/window-manager/layouts.ts` |
+|---|---|---|
+| `fetch(` | 0 | 0 |
+| `https://` | 0 | 0 |
+| `axios` / `node-fetch` / `undici` | 0 | 0 |
+
+Both committed files are network-free. ✅ for what exists.
 
 ## 5. Security pass
 
-_TBD — filled in commit #4._
+### 5.1 `any` usage in new files
+
+`grep -rn ": any\b\|as any" src/perception src/window-manager` on the worktree with C1 + C3 files copied in: **0 matches**. ✅ Strict TypeScript discipline held.
+
+### 5.2 Silent catches
+
+`grep -rn "catch[^{]*\{\s*\}" src/perception src/window-manager`: **0 matches**. ✅
+
+Two near-misses worth calling out:
+- `src/perception/native-bridge.ts:104-108` — `isAvailable()` uses a catch that returns `false` rather than swallowing. This is intentional and documented.
+- The untracked `screen-capture.ts` WIP has a `.catch(() => { /* swallow — tick logs internally */ })` on the interval callback. Acceptable pattern *because* the inner `tick()` does its own `try/catch` + `console.warn`. Flag for re-review when the file is actually committed.
+
+### 5.3 Path-traversal in Swift helper args
+
+The `cortexos-vision capture` and `cortexos-vision ocr` subcommands accept `--out <path>` and `--image <path>` respectively. Both reach the filesystem via Swift's `URL(fileURLWithPath:)` without normalization.
+
+- **Agent-controlled filename risk:** Yes, if an agent passes `--image ../../etc/passwd` Swift will happily try to open it. Vision will return `ocr-failed: cannot read image: ...` (`OCRCommand.swift:17-20`) because it's not a valid image, but on a valid image the helper *will* read it. **Low exploitability** because (a) the OCR text path returns only OCR text, not raw bytes, (b) the attack surface requires the attacker to already be driving cortexOS, and (c) no privilege escalation is available — the helper runs with the user's own credentials. **Recommended hardening:** in `native-bridge.ts`, reject `imagePath` that contains `..` or doesn't start with `homedir()` or `tmpdir()`. Same for `outPath`.
+- **`--out` in capture:** The TS bridge constructs the path itself via `randomUUID()` + `storageDir` (in the untracked `screen-capture.ts`), so the risk only applies if an external caller passes a custom `outPath`. Still worth the same normalization guard.
+
+### 5.4 Shell injection in yabai/AppleScript calls
+
+- `src/window-manager/yabai-bridge.ts` is **not committed**, so formally no risk surface exists on the branch today. The untracked WIP version does the right thing: `execFile("yabai", args, { shell: false })` with every user-supplied value passed as a separate `args` element. When it lands, verify this property holds.
+- AppleScript fallback is also unshipped. When it lands, audit against the same pattern used in `src/social/drivers/imessage-driver.ts:90-95` (`escapeAppleScript(s)` — escapes `"` and `\` before interpolating into the `osascript -e '...'` string). That escape function handles the two main vectors (`"`, `\`) but not Unicode control characters or newlines — when C3 ships, re-audit.
+
+### 5.5 AppleScript injection (user-controlled strings → `osascript -e`)
+
+- Same status as §5.4 — no AppleScript in Phase 8/11 lanes today. Phase 11 item 11.1 fallback must use `execFile("osascript", ["-e", template], …)` with a **parameterized template** or with the same escape helper used in Phase 4's iMessage driver. Never string-concat user input into `-e`.
+
+### 5.6 `execFile` / `execSync` / `shell: true` audit
+
+`grep -rn "shell: *true\|exec\(" src/perception src/window-manager src/sensors src/mcp` → **0 matches**. ✅ All existing callers use `execFile` with arg arrays.
+
+### 5.7 Timeout + maxBuffer on every spawn
+
+- `native-bridge.ts:124-127` — `{ timeout: 15000, encoding: "utf8" }`. Timeout is set but `maxBuffer` is not. Default Node `maxBuffer` is 1 MB, which is enough for JSON metadata/OCR, but explicit `maxBuffer: 4 * 1024 * 1024` would document the ceiling. Minor nit.
+- Future yabai wrapper (when committed) must set both `timeout` and `maxBuffer` since `yabai -m query --windows` can emit >100 KB JSON on machines with many windows. The WIP version I saw sets 5 s + 1 MB — fine.
+
+### 5.8 Untyped child_process error codes
+
+`native-bridge.ts:136` — `const errno = (err as NodeJS.ErrnoException).code;` then compares to `"ENOENT"`. The `as` cast is pragmatic (Node's callback signature is loose). Consider narrowing via `typeof err === "object" && err && "code" in err && err.code === "ENOENT"` for strict-mode cleanliness, but this is idiomatic Node TypeScript and does not introduce `any`. Acceptable.
 
 ## 6. Test quality
 
