@@ -7,7 +7,7 @@
  * Tools exposed:
  *   nchinda_recall, nchinda_remember, nchinda_schedule, nchinda_research,
  *   nchinda_send, nchinda_broadcast, nchinda_status, nchinda_escalate,
- *   nchinda_ask_peer, nchinda_see, nchinda_rewind
+ *   nchinda_ask_peer, nchinda_see, nchinda_rewind, watch_draft
  */
 
 import { createInterface } from "node:readline";
