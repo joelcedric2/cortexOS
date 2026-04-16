@@ -18,6 +18,7 @@ import type { EventBus } from "../ipc/event-bus.js";
 import { extractIntent } from "./intent-extractor.js";
 import type { PerceptionKillSwitch } from "../perception/kill-switch.js";
 import type { AuditLog } from "../proactivity/audit.js";
+import type { ConvIntent } from "../intent/conversation-intent.js";
 
 export interface VoiceOrchestratorOptions {
   wakeWord: WakeWordDetector;
@@ -39,6 +40,20 @@ export interface VoiceOrchestratorOptions {
   killSwitch?: PerceptionKillSwitch;
   /** Optional audit log for intent routing decisions. */
   audit?: AuditLog;
+  /**
+   * Phase 14 — conversation-intent side-channel. If supplied, every
+   * non-control transcript (i.e. anything that falls through to onTask) is
+   * ALSO classified as a conversational intent in parallel. On
+   * `stated-intent`, the router is called to push an offer onto the
+   * PendingSurface (never auto-executes). Failures are swallowed — this
+   * path MUST NOT block or disrupt the primary onTask pipeline.
+   */
+  conversationIntent?: {
+    /** Classify — typically `classifyConv` bound with Haiku options. */
+    classify: (transcript: string) => Promise<ConvIntent>;
+    /** Route — typically `surfaceIntent` bound with deps. */
+    route: (intent: ConvIntent) => Promise<unknown>;
+  };
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -53,6 +68,15 @@ export class VoiceOrchestrator {
   private readonly hotkey: GlobalHotkey | undefined;
   private readonly killSwitch: PerceptionKillSwitch | undefined;
   private readonly audit: AuditLog | undefined;
+  private readonly conversationIntent:
+    | VoiceOrchestratorOptions["conversationIntent"]
+    | undefined;
+  /**
+   * Handle to the most recent fire-and-forget conv-intent promise. Kept
+   * only for tests that need to await completion — production code never
+   * blocks on it.
+   */
+  private lastConvIntentTask: Promise<void> | undefined;
   /** User name for personalized greetings. Reserved for Phase 6 UI. */
   readonly userName: string | undefined;
   private running = false;
@@ -75,6 +99,7 @@ export class VoiceOrchestrator {
     this.killSwitch = opts.killSwitch;
     this.audit = opts.audit;
     this.userName = opts.userName;
+    this.conversationIntent = opts.conversationIntent;
   }
 
   async start(): Promise<void> {
@@ -184,6 +209,12 @@ export class VoiceOrchestrator {
         return;
       }
 
+      // 3.6. Phase 14 — fire-and-forget conversation-intent classification.
+      // Runs in parallel with the normal onTask dispatch so a slow Haiku
+      // round-trip never blocks the primary voice flow. The router
+      // never auto-executes; it only surfaces offers on stated-intent.
+      this.dispatchConversationIntent(transcript);
+
       // 4. Transition to thinking.
       this.sm.transition("thinking");
 
@@ -231,5 +262,30 @@ export class VoiceOrchestrator {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Fire-and-forget Phase 14 side-channel. The returned promise is stored on
+   * `this.lastConvIntentTask` solely so tests can await completion; it is
+   * never awaited by the voice pipeline.
+   */
+  private dispatchConversationIntent(transcript: string): void {
+    const conv = this.conversationIntent;
+    if (!conv) return;
+    this.lastConvIntentTask = (async () => {
+      try {
+        const intent = await conv.classify(transcript);
+        await conv.route(intent);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Isolate failures — this path must never break voice.
+        console.error("[VoiceOrchestrator] conv-intent dispatch failed:", msg);
+      }
+    })();
+  }
+
+  /** Test-only: await the most recent fire-and-forget conv-intent task. */
+  async _flushConversationIntentForTests(): Promise<void> {
+    await this.lastConvIntentTask;
   }
 }
