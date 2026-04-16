@@ -114,3 +114,124 @@ introduced during integration.
    verdict was written BEFORE C2 + C4's later commits landed; by the time
    this note was written all four branches are merged and the DoD is
    green. T2 may want to update their verdict.
+
+## Final integration (grand-merge)
+
+Baseline: `phase8-11/integration` at `685aa0e` — 1089/1089 tests green
+(Phase 8 + Phase 11 DoD already proven).
+
+Integration branch: `phase8-final/integration` off `phase8-11/integration`.
+
+### §8.5 branches merged
+
+| # | Branch | Final commit | Net shipped |
+|---|---|---|---|
+| A1 | `phase8.5/retention-core` | `c8f53ab` | `screen_memories` SQLite wrapper (422 LOC) + `retention.ts` (150 LOC) + nightly-worker wiring. 28 tests. |
+| A2 | `phase8.5/encode-hash-adaptive` | `74b5187` | `phash.ts` (64-bit aHash) + `webp-encoder.ts` (q=75, 1280 px) + adaptive fps + 24h byte-budget gate in `screen-capture.ts`. 42 tests. |
+| A3 | `phase8.5/kill-audit` | `be03fb5` | `intent-extractor.ts` + `kill-switch.ts` + `ocr-audit.ts` + `AuditAction` extension + voice-orchestrator kill wiring + `screen-capture.ts` audit hooks. 57 tests. |
+
+### Merge order (actually executed)
+
+1. Branch `phase8-final/integration` off `phase8-11/integration`.
+2. Merge A1 (`phase8.5/retention-core`) — clean merge, no conflicts.
+   Baseline: 1117/1117 (1089 + 28).
+3. Merge A2 (`phase8.5/encode-hash-adaptive`) — add/add conflict on
+   `src/perception/screen-capture.ts`. Resolved by keeping A2's full
+   rewrite (strict superset of HEAD; privacy + ring-buffer invariants
+   preserved). Cross-agent fixups:
+     * `captureNow()` now returns a `CaptureOutcome` discriminated union.
+       Updated `src/mcp/nchinda-see.ts` to unwrap `outcome.frame` and
+       raise explicit errors for `budget-exceeded` / `duplicate`.
+     * Legacy tests `tests/screen-capture.test.ts` and
+       `tests/nchinda-see-tool.test.ts` updated to use the new API
+       (`startFps` instead of `intervalSec`; outcome unwrap in
+       assertions).
+   **Stub kill #1**: deleted `src/perception/_a1-stub.ts`. Moved the
+   `ScreenMemoriesStore` structural interface into
+   `src/perception/screen-memories-db.ts` (co-located with the real
+   `ScreenMemoriesDB` impl). Re-pointed imports in `screen-capture.ts`
+   and `tests/capture-budget.test.ts`. Extended the test's `fakeStore`
+   to return the full `ScreenMemoryRow` shape (A1's interface has more
+   fields than A2's minimal stub did). Baseline: 1159/1159 (1117 + 42).
+4. Merge A3 (`phase8.5/kill-audit`) — six conflict regions all on
+   `src/perception/screen-capture.ts`. Every conflict was A2-adaptive
+   state vs A3-audit state; resolution kept BOTH in every case:
+     * Imports: phash ladder + `CAPTURE_DEFAULTS` (A2) AND `AuditLog`
+       (A3).
+     * `ScreenCaptureOptions`: A2's `now?` field and A3's `audit?`
+       field both kept.
+     * Instance fields: superset — A2's dedup/budget/bus/surface/
+       phash/now fields AND A3's `audit` field.
+     * Constructor: A3's `this.audit = opts.audit` appended after A2's
+       existing assignments.
+     * `tick()` catch: A3's audit-on-skip + redact-on-error branches
+       kept; A2's `maybeAdaptFps(fpsBefore)` moved to the `finally`
+       block (preserving A2's rate-control invariant).
+     * `doCapture()`: A2's DB insert + discriminated `{ ok: true, frame }`
+       return kept; A3's `recordAudit(\`app=\${frame.active_app}\`)`
+       appended before the return. Final: 1216/1216 (1159 + 57).
+5. Cherry-pick `f724ea2` — re-apply VISION.md scope-rework (pre-§8.5
+   doc) content that had been rolled back. Clean — no conflicts (the
+   base's VISION.md was still at pre-rework state). Test count
+   unchanged: 1216/1216.
+6. Add `tests/phase8-full-lifecycle.test.ts` — seven-scenario DoD
+   smoke covering capture / private-app / dedup / budget / retention /
+   kill-switch / voice-kill. Final: **1223/1223 green**.
+
+### Conflicts encountered + resolution (summary)
+
+| File | Type | Conflict | Resolution |
+|---|---|---|---|
+| `src/perception/screen-capture.ts` | add/add (A2) | A2's 487-line rewrite vs HEAD's 292-line baseline | Kept A2 whole-file; verified all HEAD invariants (private-app allowlist, forceOff latch, ring buffer) survive. |
+| `src/perception/screen-capture.ts` | content (A3) | 6 regions: imports, options iface, instance fields, ctor, tick() catch, doCapture() return | Superset merge — kept every field / call from both sides. Audit side-effects now fire for every successful capture AND every skip/error; adaptive fps + budget gate unchanged. |
+
+### Cross-agent API mismatches reconciled
+
+| Mismatch | Fix |
+|---|---|
+| A2's `captureNow()` returns `CaptureOutcome`; legacy callers expected `ScreenFrame`. | `nchinda-see.ts`: unwrap `outcome.frame`, convert `budget-exceeded` / `duplicate` to explicit errors. Legacy unit tests updated to match the new surface. |
+| A2's `ScreenMemoriesStore` stub (5 fields) vs A1's `ScreenMemoryRow` (12 fields). | Stub deleted; interface moved to `screen-memories-db.ts`; the one fake store in `capture-budget.test.ts` expanded to return the full row shape. |
+| A3's `recordAudit()` call site in `doCapture()` vs A2's DB-insert + return-outcome block (same function). | Appended the audit call between DB insert and the `{ok: true, frame}` return. |
+
+### Stub kill
+
+- `src/perception/_a1-stub.ts` fully removed. Grep for `_a1-stub`
+  returns only a docstring mention inside
+  `src/perception/screen-memories-db.ts` (no active imports).
+
+### VISION.md rework re-applied
+
+- `f724ea2` cherry-picked cleanly; §7.0 "Not hardcoded", §4 Phase 8
+  rewrite (on-demand + active-task modes), and §8.5 retention +
+  adaptive + audit section are all present.
+
+### Policy defaults — no magic numbers
+
+All three agents' numeric defaults are exported as named consts and
+picked up via `opts?.x ?? DEFAULT` at the boundary:
+
+- A1: `DEFAULT_RETENTION_DAYS = 7` in `src/perception/retention.ts`.
+- A2: `CAPTURE_DEFAULTS` block in `src/perception/screen-capture.ts`
+  (START_FPS, MIN_FPS, MAX_FPS, RING_BUFFER_SIZE, DEDUP_WINDOW_SEC,
+  DEDUP_WINDOW_MIN_SAMPLES, DEDUP_RATE_UPSCALE_HI,
+  DEDUP_RATE_DOWNSCALE_LO, DEDUP_MAX_HAMMING,
+  CAPTURE_BUDGET_DAILY_BYTES, BUDGET_WINDOW_MS).
+- A3: `DEFAULT_COMBO = "cmd+shift+escape"` in
+  `src/perception/kill-switch.ts`; kill / pause / resume / config
+  regexes at module scope in `src/voice/intent-extractor.ts`.
+
+### Final state
+
+- `tsc --noEmit`: exit 0.
+- `npm test`: **1223/1223 green** (1089 base + 28 A1 + 42 A2 + 57 A3
+  + 7 DoD full-lifecycle).
+- `src/perception/_a1-stub.ts`: deleted.
+- Commits on `phase8-final/integration` (6):
+  * `26ef466` merge: A1 retention-core into phase8-final/integration
+  * `cab0730` merge(phase8.5): A2 encode-hash-adaptive (phash + webp + budget)
+  * `27ce76b` merge(phase8.5): A3 kill-audit (voice-kill + audit hooks + OCR-audit wrapper)
+  * `bd09c08` docs(phase-8+): re-apply scope-rework content (was rolled back by linter)
+  * `9c0cc40` test(phase-8+): full-lifecycle DoD smoke — union of A1 + A2 + A3
+  * (this commit) docs(phase-8+): final integration notes
+
+Ready for human review to merge `phase8-final/integration` → `main`.
