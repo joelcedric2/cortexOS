@@ -14,6 +14,8 @@ import { installSkill } from "../skills/install.js";
 import type { InstallDeps, InstallResult } from "../skills/install.js";
 import { runSkill } from "../skills/runner.js";
 import type { RunSkillDeps, RunSkillOutput } from "../skills/runner.js";
+import { createSkill } from "../skills/create.js";
+import type { CreateSkillDeps, CreateSkillResult } from "../skills/create.js";
 
 // ----------------------------- Input schemas --------------------------------
 
@@ -33,6 +35,12 @@ const UseInputSchema = z.object({
   timeout_s: z.number().int().min(1).max(300).optional(),
 });
 
+const CreateInputSchema = z.object({
+  need: z.string().min(1),
+  name: z.string().optional(),
+  language: z.enum(["typescript", "python", "shell"]).optional(),
+});
+
 // ----------------------------- Types ----------------------------------------
 
 export interface DiscoverResult {
@@ -48,6 +56,8 @@ export interface SkillToolsDeps {
   runDeps: RunSkillDeps;
   /** Agent A's discover function. Stub returns [] if not wired. */
   skillDiscover?: (need: string) => Promise<DiscoverResult>;
+  /** Dependencies for createSkill. Optional — skill_create unavailable if absent. */
+  createDeps?: CreateSkillDeps;
 }
 
 // ----------------------------- Handlers -------------------------------------
@@ -94,6 +104,24 @@ export class SkillTools {
         timeout_s: input.timeout_s ?? 30,
       },
       this.deps.runDeps,
+    );
+  }
+
+  /**
+   * skill_create(need, name?, language?) — create a new skill from scratch.
+   */
+  async create(raw: unknown): Promise<CreateSkillResult> {
+    if (!this.deps.createDeps) {
+      throw new Error("skill_create: createDeps not wired");
+    }
+    const input = CreateInputSchema.parse(raw);
+    return createSkill(
+      {
+        need: input.need,
+        name: input.name,
+        language: input.language,
+      },
+      this.deps.createDeps,
     );
   }
 }

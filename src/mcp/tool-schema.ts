@@ -376,6 +376,212 @@ export const SKILL_USE_SCHEMA: McpToolSchema = {
   },
 };
 
+export const SKILL_CREATE_SCHEMA: McpToolSchema = {
+  name: "skill_create",
+  description:
+    "Create a new skill from a natural-language description. Runs a 7-step flow: research → design SKILL.md → scaffold tests → implement → vet → register → validate. Returns the created skill's id, path, and test results.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      need: {
+        type: "string",
+        description: "Natural-language description of the capability to create.",
+        minLength: 1,
+      },
+      name: {
+        type: "string",
+        description: "Optional slug for the skill. Auto-derived from need if omitted.",
+      },
+      language: {
+        type: "string",
+        enum: ["typescript", "python", "shell"],
+        description: "Implementation language. Default: typescript.",
+      },
+    },
+    required: ["need"],
+    additionalProperties: false,
+  },
+};
+
+// ────────────────────────── CDP Browser Tools ──────────────────────────
+
+export const CDP_NAVIGATE_SCHEMA: McpToolSchema = {
+  name: "cdp_navigate",
+  description:
+    "Navigate the browser to a URL and wait for the page to load. Opens a CDP-controlled Chrome tab if none exists.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "The URL to navigate to (must be a valid URL).",
+      },
+    },
+    required: ["url"],
+    additionalProperties: false,
+  },
+};
+
+export const CDP_CLICK_SCHEMA: McpToolSchema = {
+  name: "cdp_click",
+  description:
+    "Click an element on the page by CSS selector. Resolves the selector, computes the center of the element's bounding box, and dispatches mouse press/release events.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      selector: {
+        type: "string",
+        description: "CSS selector for the element to click.",
+      },
+    },
+    required: ["selector"],
+    additionalProperties: false,
+  },
+};
+
+export const CDP_TYPE_SCHEMA: McpToolSchema = {
+  name: "cdp_type",
+  description:
+    "Type text into an input element. First clicks the element to focus it, then dispatches key events for each character.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      selector: {
+        type: "string",
+        description: "CSS selector for the input element.",
+      },
+      text: {
+        type: "string",
+        description: "The text to type.",
+      },
+      delay: {
+        type: "integer",
+        description: "Delay in ms between keystrokes (0-1000). Default 0.",
+        minimum: 0,
+        maximum: 1000,
+      },
+    },
+    required: ["selector", "text"],
+    additionalProperties: false,
+  },
+};
+
+export const CDP_READ_TEXT_SCHEMA: McpToolSchema = {
+  name: "cdp_read_text",
+  description:
+    "Extract visible text from the page. When selector is omitted, returns document.body.innerText.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      selector: {
+        type: "string",
+        description: "Optional CSS selector. Defaults to document.body.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const CDP_SCREENSHOT_SCHEMA: McpToolSchema = {
+  name: "cdp_screenshot",
+  description:
+    "Capture a PNG screenshot of the current page. Returns base64-encoded image data.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      fullPage: {
+        type: "boolean",
+        description: "Capture the full scrollable page, not just the viewport. Default false.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const CDP_WAIT_FOR_SCHEMA: McpToolSchema = {
+  name: "cdp_wait_for",
+  description:
+    "Wait until a CSS selector matches an element on the page. Polls via requestAnimationFrame. Throws on timeout.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      selector: {
+        type: "string",
+        description: "CSS selector to wait for.",
+      },
+      timeoutMs: {
+        type: "integer",
+        description: "Max wait time in ms (100-30000). Default 5000.",
+        minimum: 100,
+        maximum: 30000,
+      },
+    },
+    required: ["selector"],
+    additionalProperties: false,
+  },
+};
+
+export const SOCIAL_SEND_SCHEMA: McpToolSchema = {
+  name: "social_send",
+  description:
+    "Send a direct message on a social platform. Picks the right driver (IG/X/LinkedIn/etc.), runs the universal flow (login check → resolve target → open conversation → type message → escalation confirmation). Always triggers human confirmation before final send.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      platform: {
+        type: "string",
+        enum: [
+          "ig", "x", "linkedin", "reddit", "tiktok",
+          "discord", "telegram", "whatsapp", "imessage",
+        ],
+        description: "Target social platform.",
+      },
+      target: {
+        type: "string",
+        description:
+          "Handle or display name of the recipient (e.g. '@jobed', '+15551234567').",
+        minLength: 1,
+        maxLength: 256,
+      },
+      message: {
+        type: "string",
+        description: "The message to send. Max 4000 chars.",
+        minLength: 1,
+        maxLength: 4000,
+      },
+    },
+    required: ["platform", "target", "message"],
+    additionalProperties: false,
+  },
+};
+
+export const SOCIAL_POST_SCHEMA: McpToolSchema = {
+  name: "social_post",
+  description:
+    "Publish content on a social platform. NOT YET IMPLEMENTED — ships in Phase 5. Always throws.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      platform: {
+        type: "string",
+        enum: [
+          "ig", "x", "linkedin", "reddit", "tiktok",
+          "discord", "telegram", "whatsapp", "imessage",
+        ],
+        description: "Target social platform.",
+      },
+      content: {
+        type: "string",
+        description: "The content to publish.",
+        minLength: 1,
+        maxLength: 10000,
+      },
+    },
+    required: ["platform", "content"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -392,4 +598,13 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   SKILL_DISCOVER_SCHEMA,
   SKILL_INSTALL_SCHEMA,
   SKILL_USE_SCHEMA,
+  SKILL_CREATE_SCHEMA,
+  CDP_NAVIGATE_SCHEMA,
+  CDP_CLICK_SCHEMA,
+  CDP_TYPE_SCHEMA,
+  CDP_READ_TEXT_SCHEMA,
+  CDP_SCREENSHOT_SCHEMA,
+  CDP_WAIT_FOR_SCHEMA,
+  SOCIAL_SEND_SCHEMA,
+  SOCIAL_POST_SCHEMA,
 ];
