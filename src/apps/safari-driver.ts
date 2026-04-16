@@ -18,13 +18,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { AuditLog } from "../proactivity/audit.js";
+import { quoteAS } from "./applescript-util.js";
 
 const execFile = promisify(execFileCb);
 
-/** Escape a string for safe interpolation inside an AppleScript double-quoted literal. */
-export function quoteAS(s: string): string {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
+/** Re-export from shared module. Wraps in "…" — caller does NOT add quotes. */
+export { quoteAS };
 
 /* ------------------------------------------------------------------ */
 /*  Public types                                                       */

@@ -14,29 +14,15 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { AuditLog } from "../proactivity/audit.js";
+import { quoteASInner as quoteAS } from "./applescript-util.js";
 
 const execFile = promisify(execFileCb);
 
 /* ------------------------------------------------------------------ */
-/*  Escape helper                                                      */
+/*  Escape helper — re-export from shared module                       */
 /* ------------------------------------------------------------------ */
 
-/**
- * Escape a user-supplied string so it can be safely concatenated inside an
- * AppleScript double-quoted literal.
- *
- *   - Doubles every embedded double-quote (AppleScript-standard escape).
- *   - Escapes backslashes so they survive the AppleScript parser.
- *   - Strips bare carriage-returns / linefeeds (AppleScript literals may not
- *     span lines; newlines are represented via the `& return &` operator,
- *     which callers can compose if they need them).
- */
-export function quoteAS(s: string): string {
-  return s
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/[\r\n]+/g, " ");
-}
+export { quoteAS };
 
 /* ------------------------------------------------------------------ */
 /*  Public types                                                       */
