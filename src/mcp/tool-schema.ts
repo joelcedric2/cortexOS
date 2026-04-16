@@ -663,6 +663,30 @@ export const WM_LIST_WINDOWS_SCHEMA: McpToolSchema = {
 
 // ────────────────────────── Perception Tools ──────────────────────────────
 
+export const WATCH_DRAFT_SCHEMA: McpToolSchema = {
+  name: "watch_draft",
+  description:
+    "Enable or disable the Phase 13 real-time writing coach for one app (by bundle id) or globally. Default is OFF — the coach only subscribes to AX text-field notifications for explicitly enabled apps. Returns {ok:true, enabled:[bundle,…]}.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      enable: {
+        type: "boolean",
+        description: "True to enable, false to disable.",
+      },
+      app: {
+        type: "string",
+        description:
+          "Optional app bundle id (e.g. 'com.apple.mail'). Omit for a global toggle.",
+        minLength: 1,
+        maxLength: 256,
+      },
+    },
+    required: ["enable"],
+    additionalProperties: false,
+  },
+};
+
 export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   name: "nchinda_see",
   description:
@@ -755,4 +779,5 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   WM_FOCUS_SCHEMA,
   WM_SPACE_SWITCH_SCHEMA,
   WM_LIST_WINDOWS_SCHEMA,
+  WATCH_DRAFT_SCHEMA,
 ];

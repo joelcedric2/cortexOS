@@ -189,6 +189,18 @@ async function dispatch(name, args, tools) {
       if (name === "wm_space_switch") return await wm.spaceSwitch(args);
       return await wm.listWindows(args);
     }
+    case "watch_draft": {
+      const { watchDraft, InMemoryWatchDraftController } = await import(
+        "../../dist/mcp/watch-draft-tool.js"
+      );
+      // Orchestrator-provided controller if present; otherwise fall back to
+      // a process-local in-memory controller. Default allow-list stays
+      // empty per Phase 13 privacy spec.
+      if (!runtime.watchDraftController) {
+        runtime.watchDraftController = new InMemoryWatchDraftController();
+      }
+      return await watchDraft(args, { controller: runtime.watchDraftController });
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
