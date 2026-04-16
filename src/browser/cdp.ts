@@ -288,6 +288,7 @@ export interface CDPBrowserInternals {
     args: string[],
   ) => ChildProcess;
   fetchTargets?: (port: number) => Promise<CDPTarget[]>;
+  createNewTarget?: (port: number) => Promise<CDPTarget>;
   createSession?: () => CDPSession;
 }
 
@@ -348,7 +349,8 @@ class CDPBrowserImpl implements CDPBrowser {
     this.assertConnected();
 
     // Use PUT /json/new to create a blank tab
-    const newTarget = await createNewTarget(this.port);
+    const createFn = this.internals.createNewTarget ?? createNewTarget;
+    const newTarget = await createFn(this.port);
     const session = this.internals.createSession?.() ?? new CDPSession();
     await session.connect(newTarget.webSocketDebuggerUrl);
     this.activeSessions.push(session);
