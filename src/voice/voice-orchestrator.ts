@@ -15,6 +15,9 @@ import type { SpeechToText } from "./stt.js";
 import type { TextToSpeech } from "./tts.js";
 import type { GlobalHotkey } from "./hotkey.js";
 import type { EventBus } from "../ipc/event-bus.js";
+import { extractIntent } from "./intent-extractor.js";
+import type { PerceptionKillSwitch } from "../perception/kill-switch.js";
+import type { AuditLog } from "../proactivity/audit.js";
 
 export interface VoiceOrchestratorOptions {
   wakeWord: WakeWordDetector;
@@ -27,6 +30,15 @@ export interface VoiceOrchestratorOptions {
   hotkey?: GlobalHotkey;
   /** User name for personalized replies (e.g. "Cedric"). */
   userName?: string;
+  /**
+   * Phase 8.5 — if supplied, each transcript is first classified by
+   * {@link extractIntent}. When the intent is `kill`, the perception
+   * kill-switch fires, any in-flight TTS is stopped, and the transcript is
+   * NOT forwarded to `onTask`.
+   */
+  killSwitch?: PerceptionKillSwitch;
+  /** Optional audit log for intent routing decisions. */
+  audit?: AuditLog;
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -39,6 +51,8 @@ export class VoiceOrchestrator {
   private readonly bus: EventBus;
   private readonly onTask: (transcript: string) => Promise<string>;
   private readonly hotkey: GlobalHotkey | undefined;
+  private readonly killSwitch: PerceptionKillSwitch | undefined;
+  private readonly audit: AuditLog | undefined;
   /** User name for personalized greetings. Reserved for Phase 6 UI. */
   readonly userName: string | undefined;
   private running = false;
@@ -58,6 +72,8 @@ export class VoiceOrchestrator {
     this.bus = opts.bus;
     this.onTask = opts.onTask;
     this.hotkey = opts.hotkey;
+    this.killSwitch = opts.killSwitch;
+    this.audit = opts.audit;
     this.userName = opts.userName;
   }
 
@@ -136,6 +152,35 @@ export class VoiceOrchestrator {
       if (!transcript.trim()) {
         // Empty transcript — go back to idle.
         this.sm.transition("idle");
+        return;
+      }
+
+      // 3.5. Phase 8.5 — classify the transcript. Orchestrator-level intents
+      // (kill / pause / resume / config) short-circuit the normal task
+      // pipeline. Kill is the only one wired here; the others fall through
+      // to onTask as-if they were normal tasks until Phase 9+ handles them.
+      const intent = extractIntent(transcript);
+      if (intent.kind === "kill") {
+        // Stop any in-flight TTS immediately.
+        this.tts.stop();
+        // Fire the kill-switch (never rejects — trigger() is best-effort
+        // internally and idempotent).
+        if (this.killSwitch) {
+          await this.killSwitch.trigger("voice");
+        }
+        // One audit line documenting the routing decision.
+        this.audit?.append({
+          action: "voice_intent",
+          detail: `intent=kill transcript=${intent.payload?.transcript ?? ""}`,
+          ts: new Date(),
+        });
+        // Skip onTask; go back to idle so the mic does not immediately
+        // re-engage.
+        try {
+          this.sm.transition("idle");
+        } catch {
+          // State machine may reject if already idle — safe to ignore.
+        }
         return;
       }
 
