@@ -20,6 +20,20 @@ import { homedir } from "node:os";
  *   - ocr                — Apple Vision OCR ran on a PNG
  *   - vision_llm         — the vision-brief LLM polish path fired (Haiku)
  *   - voice_intent       — the voice intent extractor routed a transcript
+ *
+ * Phase 9 adds camera-side actions (always on-demand, never looped):
+ *   - camera_capture     — a single AVFoundation frame was captured
+ *   - camera_llm         — Claude Sonnet vision polish path fired for a camera frame
+ *
+ * Phase 12 adds app-driver mutations:
+ *   - app_mutation       — a native-app driver (Safari, Notes, Reminders,
+ *                           Music, Finder, Mail, Calendar, Messages) performed
+ *                           a write (create/update/delete). Irreversible
+ *                           mutations are gated behind an escalation first.
+ *
+ * Phase 10 adds computer-use actuation:
+ *   - cu_action          — an accessibility / actuator action (click, type,
+ *                           keypress) fired through the computer-use agent loop.
  */
 export type AuditAction =
   | "sensor_sample"
@@ -30,7 +44,11 @@ export type AuditAction =
   | "capture"
   | "ocr"
   | "vision_llm"
-  | "voice_intent";
+  | "voice_intent"
+  | "camera_capture"
+  | "camera_llm"
+  | "app_mutation"
+  | "cu_action";
 
 export interface AuditEntry {
   /** Action type — see {@link AuditAction}. */

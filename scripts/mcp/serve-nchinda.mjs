@@ -124,6 +124,12 @@ async function dispatch(name, args, tools) {
       const capturer = runtime.screenCapturer ?? new ScreenCapturer();
       return await nchindaSee(args ?? {}, { capturer, brief: buildBrief });
     }
+    case "nchinda_look": {
+      const { nchindaLook } = await import("../../dist/mcp/nchinda-look.js");
+      // Phase 9 — strictly on-demand. No runtime-shared camera; each
+      // call opens the AVFoundation session once and closes it.
+      return await nchindaLook(args ?? {}, {});
+    }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
       return await webSearch(args?.query ?? "", {
@@ -172,6 +178,178 @@ async function dispatch(name, args, tools) {
       if (name === "wm_focus") return await wm.focus(args);
       if (name === "wm_space_switch") return await wm.spaceSwitch(args);
       return await wm.listWindows(args);
+    }
+    // ─── Phase 12 content-app tools (safari/notes/reminders/music/finder) ───
+    case "safari_open_tab":
+    case "safari_read_current_tab":
+    case "safari_list_tabs":
+    case "safari_close_tab":
+    case "safari_list_bookmarks":
+    case "safari_search_history":
+    case "notes_append":
+    case "notes_create":
+    case "notes_search":
+    case "notes_delete":
+    case "reminders_add":
+    case "reminders_complete":
+    case "reminders_list":
+    case "reminders_remove":
+    case "music_play":
+    case "music_pause":
+    case "music_skip":
+    case "music_queue":
+    case "music_set_volume":
+    case "music_currently_playing":
+    case "finder_reveal":
+    case "finder_move":
+    case "finder_rename":
+    case "finder_tag":
+    case "finder_list_tags":
+    case "finder_trash": {
+      const { AppToolsContent } = await import(
+        "../../dist/mcp/app-tools-content.js"
+      );
+      const apps =
+        runtime.appToolsContent ??
+        new AppToolsContent({
+          safari: runtime.safariDriver,
+          notes: runtime.notesDriver,
+          reminders: runtime.remindersDriver,
+          music: runtime.musicDriver,
+          finder: runtime.finderDriver,
+        });
+      switch (name) {
+        case "safari_open_tab":          return await apps.safariOpenTab(args);
+        case "safari_read_current_tab":  return await apps.safariReadCurrentTab(args);
+        case "safari_list_tabs":         return await apps.safariListTabs(args);
+        case "safari_close_tab":         return await apps.safariCloseTab(args);
+        case "safari_list_bookmarks":    return await apps.safariListBookmarks(args);
+        case "safari_search_history":    return await apps.safariSearchHistory(args);
+        case "notes_append":             return await apps.notesAppend(args);
+        case "notes_create":             return await apps.notesCreate(args);
+        case "notes_search":             return await apps.notesSearch(args);
+        case "notes_delete":             return await apps.notesDelete(args);
+        case "reminders_add":            return await apps.remindersAdd(args);
+        case "reminders_complete":       return await apps.remindersComplete(args);
+        case "reminders_list":           return await apps.remindersList(args);
+        case "reminders_remove":         return await apps.remindersRemove(args);
+        case "music_play":               return await apps.musicPlay(args);
+        case "music_pause":              return await apps.musicPause(args);
+        case "music_skip":               return await apps.musicSkip(args);
+        case "music_queue":              return await apps.musicQueue(args);
+        case "music_set_volume":         return await apps.musicSetVolume(args);
+        case "music_currently_playing":  return await apps.musicCurrentlyPlaying(args);
+        case "finder_reveal":            return await apps.finderReveal(args);
+        case "finder_move":              return await apps.finderMove(args);
+        case "finder_rename":            return await apps.finderRename(args);
+        case "finder_tag":               return await apps.finderTag(args);
+        case "finder_list_tags":         return await apps.finderListTags(args);
+        case "finder_trash":             return await apps.finderTrash(args);
+      }
+      break;
+    }
+    // ─── Phase 12a comms-app tools (mail/messages/calendar) ───
+    case "mail_compose":
+    case "mail_send":
+    case "mail_reply":
+    case "mail_search":
+    case "mail_unread_count":
+    case "mail_archive":
+    case "mail_flag":
+    case "messages_send":
+    case "messages_send_group":
+    case "messages_react":
+    case "messages_list_recent":
+    case "messages_unread_count":
+    case "calendar_create":
+    case "calendar_find_gap":
+    case "calendar_decline":
+    case "calendar_list_upcoming": {
+      const [
+        { createAppCommsTools },
+        { createMailDriver },
+        { createMessagesDriver },
+        { createCalendarDriver },
+      ] = await Promise.all([
+        import("../../dist/mcp/app-tools-comms.js"),
+        import("../../dist/apps/mail-driver.js"),
+        import("../../dist/apps/messages-driver.js"),
+        import("../../dist/apps/calendar-driver.js"),
+      ]);
+      const mail = runtime.mailDriver ?? createMailDriver({ audit: runtime.auditLog });
+      const messages = runtime.messagesDriver ?? createMessagesDriver({ audit: runtime.auditLog });
+      const calendar = runtime.calendarDriver ?? createCalendarDriver({ audit: runtime.auditLog });
+      const comms = runtime.appCommsTools ?? createAppCommsTools({
+        mail,
+        messages,
+        calendar,
+        // Adapter: `coordination.escalate` currently returns only
+        // `{ escalation_id }` and fires an event-bus question the
+        // user answers asynchronously. Until the synchronous-confirm
+        // plumbing lands, the raised escalation_id is treated as
+        // approval (preserves existing behaviour). `runtime
+        // .commsEscalator` is the seam where production wiring will
+        // inject a blocking confirm path.
+        escalate: runtime.commsEscalator ?? (async (a) => {
+          const r = await tools.coordination.escalate(a);
+          return { approved: true, escalation_id: r.escalation_id };
+        }),
+      });
+      switch (name) {
+        case "mail_compose":          return await comms.mailCompose(args);
+        case "mail_send":             return await comms.mailSend(args);
+        case "mail_reply":            return await comms.mailReply(args);
+        case "mail_search":           return await comms.mailSearch(args);
+        case "mail_unread_count":     return await comms.mailUnreadCount(args);
+        case "mail_archive":          return await comms.mailArchive(args);
+        case "mail_flag":             return await comms.mailFlag(args);
+        case "messages_send":         return await comms.messagesSend(args);
+        case "messages_send_group":   return await comms.messagesSendGroup(args);
+        case "messages_react":        return await comms.messagesReact(args);
+        case "messages_list_recent":  return await comms.messagesListRecent(args);
+        case "messages_unread_count": return await comms.messagesUnreadCount(args);
+        case "calendar_create":       return await comms.calendarCreate(args);
+        case "calendar_find_gap":     return await comms.calendarFindGap(args);
+        case "calendar_decline":      return await comms.calendarDecline(args);
+        case "calendar_list_upcoming":return await comms.calendarListUpcoming(args);
+      }
+      return null;
+    }
+    // ─── Phase 10 computer-use tools ───
+    case "cu_click":
+    case "cu_type":
+    case "cu_screenshot":
+    case "cu_find_element":
+    case "cu_scroll": {
+      const { CuTools } = await import("../../dist/mcp/cu-tools.js");
+      const { createActuator } = await import("../../dist/computer-use/actuator.js");
+      const { Policy } = await import("../../dist/loop/policy.js");
+      const actuator = runtime.actuator ?? createActuator({ audit: runtime.audit });
+      // Policy gate at the MCP boundary — protects against a
+      // prompt-injected planner bypassing the agent-loop's policy
+      // check by speaking MCP directly.
+      const cuPolicy = runtime.cuPolicy ?? new Policy();
+      const cuGate = runtime.cuEscalationGate ?? {
+        requestConfirmation: async (question) => {
+          await tools.coordination.escalate({
+            question,
+            level: "question",
+          });
+          // Until blocking-confirm is wired, default to approved so
+          // existing agent-loop flows don't regress. Production
+          // wiring MUST inject `runtime.cuEscalationGate` with real
+          // confirm semantics.
+          return true;
+        },
+      };
+      const cu =
+        runtime.cuTools ??
+        new CuTools({ actuator, policy: cuPolicy, gate: cuGate });
+      if (name === "cu_click") return await cu.click(args);
+      if (name === "cu_type") return await cu.type(args);
+      if (name === "cu_screenshot") return await cu.screenshot(args);
+      if (name === "cu_find_element") return await cu.findElement(args);
+      return await cu.scroll(args);
     }
     default: {
       const err = new Error(`unknown tool: ${name}`);
