@@ -24,7 +24,8 @@ export type VoiceIntentKind =
   | "pause"
   | "resume"
   | "config"
-  | "chat";
+  | "chat"
+  | "rewind";
 
 export interface VoiceIntent {
   kind: VoiceIntentKind;
@@ -52,6 +53,16 @@ const RESUME_REGEX = /^(continue|resume|go\s*on|keep\s*going|carry\s*on)$/i;
 // Matches "nchinda, set …" / "nchinda change …" / "nchinda config …"
 // (optional comma, any trailing payload).
 const CONFIG_REGEX = /^nchinda,?\s+(set|config(?:ure)?|change|update)\b/i;
+
+// Rewind — Phase 15 retroactive queries. The four openers below cover the
+// bulk of natural utterances:
+//   "what was I reading 40 minutes ago"
+//   "show me the article I had open earlier"
+//   "find the page I was on yesterday"
+//   "remember when I saw that error message"
+// Optional "nchinda, " prefix is stripped during normalization before match.
+const REWIND_REGEX =
+  /^(what\s+was\s+(i|that)\b|show\s+me\s+(the|that)\b|find\s+(the|that)\b|remember\s+when\s+i\b)/i;
 
 /**
  * Extract a VoiceIntent from a raw transcript.
@@ -88,6 +99,16 @@ export function extractIntent(transcript: string): VoiceIntent {
     return {
       kind: "config",
       payload: { transcript: normalized },
+      confidence: 1,
+    };
+  }
+
+  // Rewind — detect with or without the "nchinda, " prefix.
+  const rewindCandidate = normalized.replace(/^nchinda,?\s+/i, "");
+  if (REWIND_REGEX.test(rewindCandidate)) {
+    return {
+      kind: "rewind",
+      payload: { transcript: rewindCandidate },
       confidence: 1,
     };
   }

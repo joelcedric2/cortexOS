@@ -18,6 +18,25 @@ import type { EventBus } from "../ipc/event-bus.js";
 import { extractIntent } from "./intent-extractor.js";
 import type { PerceptionKillSwitch } from "../perception/kill-switch.js";
 import type { AuditLog } from "../proactivity/audit.js";
+import type { RewindResult } from "../rewind/rewind-query.js";
+
+/**
+ * Result-surface sink for rewind hits. Wired by the Orchestrator to the
+ * Pending Surface so the user can click-through to open the WebP. No-op
+ * when unwired — the top-1 result is still spoken via TTS.
+ */
+export interface RewindSurface {
+  present(results: RewindResult[]): void;
+}
+
+/**
+ * Handler for Phase 15 rewind queries. Implementations call `rewindSearch`
+ * internally; the orchestrator keeps the shape abstract so tests can stub
+ * the whole path without booting SQLite + the embedder.
+ */
+export interface RewindHandler {
+  query(transcript: string): Promise<RewindResult[]>;
+}
 
 export interface VoiceOrchestratorOptions {
   wakeWord: WakeWordDetector;
@@ -39,6 +58,15 @@ export interface VoiceOrchestratorOptions {
   killSwitch?: PerceptionKillSwitch;
   /** Optional audit log for intent routing decisions. */
   audit?: AuditLog;
+  /**
+   * Phase 15 — if supplied, transcripts classified as `rewind` intents are
+   * routed through this handler instead of the generic task pipeline. The
+   * top-1 hit's label is spoken via TTS; the full top-5 is surfaced to
+   * `rewindSurface` (when provided) so the UI can render thumbnails.
+   */
+  rewindHandler?: RewindHandler;
+  /** Optional Pending-Surface sink for the full top-5 rewind result set. */
+  rewindSurface?: RewindSurface;
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -53,6 +81,8 @@ export class VoiceOrchestrator {
   private readonly hotkey: GlobalHotkey | undefined;
   private readonly killSwitch: PerceptionKillSwitch | undefined;
   private readonly audit: AuditLog | undefined;
+  private readonly rewindHandler: RewindHandler | undefined;
+  private readonly rewindSurface: RewindSurface | undefined;
   /** User name for personalized greetings. Reserved for Phase 6 UI. */
   readonly userName: string | undefined;
   private running = false;
@@ -74,6 +104,8 @@ export class VoiceOrchestrator {
     this.hotkey = opts.hotkey;
     this.killSwitch = opts.killSwitch;
     this.audit = opts.audit;
+    this.rewindHandler = opts.rewindHandler;
+    this.rewindSurface = opts.rewindSurface;
     this.userName = opts.userName;
   }
 
@@ -184,6 +216,35 @@ export class VoiceOrchestrator {
         return;
       }
 
+      // Phase 15 — rewind queries short-circuit the task pipeline when a
+      // handler is wired. We speak the top-1 result's label via TTS and
+      // push the full top-5 into the Pending Surface for click-through.
+      if (intent.kind === "rewind" && this.rewindHandler) {
+        this.sm.transition("thinking");
+        let results: RewindResult[] = [];
+        try {
+          results = await this.rewindHandler.query(
+            intent.payload?.transcript ?? transcript,
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("[VoiceOrchestrator] rewind failed:", msg);
+        }
+        if (this.isStale(gen)) return;
+        this.rewindSurface?.present(results);
+        this.audit?.append({
+          action: "voice_intent",
+          detail: `intent=rewind hits=${results.length}`,
+          ts: new Date(),
+        });
+        const reply = buildRewindReply(results);
+        this.sm.transition("speaking");
+        await this.tts.speak(reply);
+        if (this.isStale(gen)) return;
+        this.sm.transition("idle");
+        return;
+      }
+
       // 4. Transition to thinking.
       this.sm.transition("thinking");
 
@@ -232,4 +293,34 @@ export class VoiceOrchestrator {
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+}
+
+/**
+ * Compose a short spoken reply for a rewind query. We voice only the
+ * top-1 hit's label (plus captured_at context); the full list lives in
+ * the Pending Surface so the user can click through to the WebP.
+ */
+function buildRewindReply(results: RewindResult[]): string {
+  if (results.length === 0) {
+    return "I couldn't find anything matching that.";
+  }
+  const top = results[0]!;
+  const label = top.label && top.label.trim() ? top.label : "that memory";
+  const when = friendlyWhen(top.captured_at);
+  const hits =
+    results.length > 1 ? ` I found ${results.length} possible matches.` : "";
+  return `${label}, from ${when}.${hits}`;
+}
+
+function friendlyWhen(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "earlier";
+  const delta = Date.now() - t;
+  const min = Math.floor(delta / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }

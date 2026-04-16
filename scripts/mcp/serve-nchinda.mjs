@@ -7,7 +7,7 @@
  * Tools exposed:
  *   nchinda_recall, nchinda_remember, nchinda_schedule, nchinda_research,
  *   nchinda_send, nchinda_broadcast, nchinda_status, nchinda_escalate,
- *   nchinda_ask_peer
+ *   nchinda_ask_peer, nchinda_see, nchinda_rewind
  */
 
 import { createInterface } from "node:readline";
@@ -123,6 +123,22 @@ async function dispatch(name, args, tools) {
       // works independently of the loop.
       const capturer = runtime.screenCapturer ?? new ScreenCapturer();
       return await nchindaSee(args ?? {}, { capturer, brief: buildBrief });
+    }
+    case "nchinda_rewind": {
+      const { nchindaRewind } = await import("../../dist/mcp/nchinda-rewind.js");
+      const { ScreenMemoriesDB } = await import("../../dist/perception/screen-memories-db.js");
+      // Runtime-shared instances (Orchestrator wires these); fall back to a
+      // fresh DB connection against the shared registry when absent. The
+      // embedder MUST be shared so int8-quantization / dim matches the
+      // screen-memories store.
+      const db = runtime.screenMemoriesDb ?? new ScreenMemoriesDB();
+      const rewindEmbedder = runtime.rewindEmbedder;
+      if (!rewindEmbedder) {
+        throw new Error(
+          "nchinda_rewind: runtime.rewindEmbedder must be wired (int8 embedding Buffer)",
+        );
+      }
+      return await nchindaRewind(args ?? {}, { db, embedder: rewindEmbedder });
     }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
