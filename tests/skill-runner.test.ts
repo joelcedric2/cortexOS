@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { runSkill, SkillRunError } from "../src/skills/runner.js";
 import type { RunSkillDeps } from "../src/skills/runner.js";
-import { InMemorySkillRegistry } from "../src/skills/_registry-stub.js";
+import { InMemorySkillRegistry } from "./helpers/in-memory-skill-registry.js";
 import type { ShellResult } from "../src/tools/shell.js";
 
 // ----------------------------- Helpers --------------------------------------
@@ -14,11 +14,12 @@ function shellOk(stdout = "", stderr = ""): ShellResult {
 function seedRegistry(): InMemorySkillRegistry {
   const reg = new InMemorySkillRegistry();
   reg.insert({
-    slug: "hello-tool",
+    id: "hello-tool",
+    name: "hello-tool",
     repo_url: "https://github.com/owner/hello-tool",
     subpath: "",
     commit_sha: "abc123",
-    trust_level: "sandboxed",
+    trust_level: "user-trusted",
   });
   return reg;
 }
@@ -145,7 +146,7 @@ describe("runSkill — happy path", () => {
 
     const skill = registry.get("hello-tool");
     assert.ok(skill);
-    assert.equal(skill.run_count, 1);
+    assert.equal(skill.success_count, 1);
     assert.equal(skill.fail_count, 0);
   });
 
@@ -166,7 +167,7 @@ describe("runSkill — happy path", () => {
     assert.equal(result.exitCode, 1);
     const skill = registry.get("hello-tool");
     assert.ok(skill);
-    assert.equal(skill.run_count, 1);
+    assert.equal(skill.success_count, 0);
     assert.equal(skill.fail_count, 1);
   });
 });
@@ -190,17 +191,6 @@ describe("runSkill — rejection cases", () => {
     await assert.rejects(
       () => runSkill({ slug: "hello-tool" }, deps),
       (err: unknown) => err instanceof SkillRunError && err.code === "QUARANTINED",
-    );
-  });
-
-  test("throws DEPRECATED for deprecated skill", async () => {
-    const registry = seedRegistry();
-    registry.setTrustLevel("hello-tool", "deprecated");
-    const deps = makeDeps({ registry });
-
-    await assert.rejects(
-      () => runSkill({ slug: "hello-tool" }, deps),
-      (err: unknown) => err instanceof SkillRunError && err.code === "DEPRECATED",
     );
   });
 

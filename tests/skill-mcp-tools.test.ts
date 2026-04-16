@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { SkillTools } from "../src/mcp/skill-tools.js";
 import type { SkillToolsDeps } from "../src/mcp/skill-tools.js";
-import { InMemorySkillRegistry } from "../src/skills/_registry-stub.js";
+import { InMemorySkillRegistry } from "./helpers/in-memory-skill-registry.js";
 import type { InstallDeps } from "../src/skills/install.js";
 import type { RunSkillDeps } from "../src/skills/runner.js";
 import type { ShellResult } from "../src/tools/shell.js";
@@ -191,6 +191,6 @@ describe("skill MCP tools — round-trip with in-memory fakes", () => {
     // 4. Verify registry state
     const skill = deps.installDeps.registry.get("my-formatter");
     assert.ok(skill);
-    assert.equal(skill.run_count, 1);
+    assert.equal(skill.success_count, 1);
   });
 });

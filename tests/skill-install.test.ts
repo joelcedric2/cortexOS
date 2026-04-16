@@ -6,7 +6,7 @@ import {
   SkillInstallError,
 } from "../src/skills/install.js";
 import type { InstallDeps, VetResult } from "../src/skills/install.js";
-import { InMemorySkillRegistry } from "../src/skills/_registry-stub.js";
+import { InMemorySkillRegistry } from "./helpers/in-memory-skill-registry.js";
 import type { ShellResult } from "../src/tools/shell.js";
 
 // ----------------------------- Helpers --------------------------------------
@@ -163,7 +163,8 @@ describe("installSkill — rejection cases", () => {
   test("rejects when slug already in registry", async () => {
     const registry = new InMemorySkillRegistry();
     registry.insert({
-      slug: "my-tool",
+      id: "my-tool",
+      name: "my-tool",
       repo_url: "https://github.com/owner/my-tool",
       subpath: "",
       commit_sha: "old",

@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 import type { ShellResult } from "../tools/shell.js";
-import type { SkillRegistryDB } from "./_registry-stub.js";
+import type { SkillRegistryDB } from "./skill-registry-db.js";
 
 // ----------------------------- Constants ------------------------------------
 
@@ -71,7 +71,6 @@ export class SkillRunError extends Error {
     public readonly code:
       | "NOT_FOUND"
       | "QUARANTINED"
-      | "DEPRECATED"
       | "NO_ENTRYPOINT"
       | "EXECUTION_FAILED"
       | "TIMEOUT",
@@ -202,12 +201,6 @@ export async function runSkill(
       "QUARANTINED",
     );
   }
-  if (skill.trust_level === "deprecated") {
-    throw new SkillRunError(
-      `skill "${parsed.slug}" is deprecated — cannot run`,
-      "DEPRECATED",
-    );
-  }
 
   // 2. Resolve entrypoint
   const skillsDir = deps.skillsDir ?? "./skills";
@@ -257,10 +250,7 @@ export async function runSkill(
   const stderrT = truncate(result.stderr, STDERR_CAP);
 
   // 6. Record run outcome
-  deps.registry.recordRun(parsed.slug, {
-    success: result.exitCode === 0,
-    durationMs,
-  });
+  deps.registry.recordRun(parsed.slug, result.exitCode === 0 ? "success" : "fail");
 
   return {
     slug: parsed.slug,

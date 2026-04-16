@@ -10,7 +10,7 @@
  */
 import { z } from "zod";
 import type { ShellResult } from "../tools/shell.js";
-import type { SkillRegistryDB, SkillRow } from "./_registry-stub.js";
+import type { SkillRegistryDB, SkillRow } from "./skill-registry-db.js";
 
 // ----------------------------- Types ----------------------------------------
 
@@ -190,15 +190,13 @@ export async function installSkill(
 
   // 9. Insert into registry as unvetted
   const row = deps.registry.insert({
-    slug,
+    id: slug,
+    name: slug,
     repo_url: input.repo_url,
     subpath: input.subpath,
     commit_sha: commitSha,
     trust_level: "unvetted",
-    metadata: {
-      skill_md_generated: skillMdGenerated,
-      vet_passed: vetPassed,
-    },
+    skill_md_path: skillMdGenerated ? skillMdPath : undefined,
   });
 
   return {
