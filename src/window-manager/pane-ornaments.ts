@@ -103,6 +103,11 @@ interface AgentLike {
   id: string;
   role: string;
   tmux_session: string | null;
+  /**
+   * Optional terminal-status marker. When `status` is present and not "running",
+   * the agent is treated as ended and its ornament is cleared during sync.
+   */
+  status?: string;
 }
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -216,6 +221,8 @@ export class PaneOrnamentManager {
   /**
    * Given the current Agent Registry contents, resolve each agent's macOS
    * window via its tmux session name and apply the correct accent colour.
+   * Idempotent: running agents get (or retain) their ornament; agents in a
+   * terminal status ("done" / "error" / "standby") have their ornament cleared.
    *
    * Matching rule: a window "hosts" an agent when the window title contains
    * the agent's `tmux_session`. Terminal.app and iTerm2 both embed the active
@@ -246,6 +253,10 @@ export class PaneOrnamentManager {
         windowTitleMatchesSession(w.title, agent.tmux_session as string),
       );
       if (!match) continue;
+      if (agent.status !== undefined && !isActiveStatus(agent.status)) {
+        await this.clear(match.id);
+        continue;
+      }
       const color = colorForRole(agent.role);
       await this.apply(match.id, color);
     }
@@ -315,6 +326,14 @@ function assertValidWindowId(id: number): void {
 
 function toMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Treats "spawning" and "running" as active. Anything else ("standby", "done",
+ * "error") is considered finished and the ornament is cleared during sync.
+ */
+function isActiveStatus(status: string): boolean {
+  return status === "running" || status === "spawning";
 }
 
 /**
