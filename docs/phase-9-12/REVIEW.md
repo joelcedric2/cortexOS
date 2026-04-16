@@ -164,12 +164,291 @@ cannot be evaluated until T1 has actually integrated all four branches.
 **Recommendation**: Reviewer 1 should re-run §4/§5 cross-cutting checks
 on `phase9-12/integration` once T1 signals completion.
 
+## 3. Per-branch findings (deep-dive)
+
+### 3.1 phase9/camera
+
+**One-shot invariant — really upheld?** Yes, defence in depth:
+
+1. `CameraCommand.swift` creates a fresh `AVCaptureSession` per call. A
+   Swift `defer` block calls `session.stopRunning()` + removes all inputs
+   + all outputs. Even if the photo-capture continuation throws, teardown
+   fires. No long-running daemon.
+2. `camera-capture.ts` has no module state, no cached bridge, no ring
+   buffer — every `captureCameraFrame()` call builds a new bridge (or
+   uses the injected one). `outputDir` defaults to `~/.cortexos/camera/`
+   with a fresh UUID filename.
+3. `serve-nchinda.mjs` does NOT pass a runtime-shared capturer to
+   `nchindaLook`, unlike `nchinda_see` which reuses `runtime.screenCapturer`.
+   Comment says: "strictly on-demand. No runtime-shared camera; each
+   call opens the AVFoundation session once and closes it."
+
+**Continuity Camera detection correct?** Yes. `discoverDevices()` adds
+`.external` (macOS 14+) and falls back to `.externalUnknown` (macOS 13).
+`pickDevice("continuity")` finds by `isExternalCamera` predicate. Label
+normalisation in `deviceLabel()` returns `"continuity"` back to TS so
+the caller knows what was actually selected.
+
+**Permission-denied path surfaces cleanly?** Yes. Swift throws
+`VisionError.permissionDenied` on `authorized`/`notDetermined` (after
+explicit `requestAccess`) / `denied` / `restricted`. Exit code 3 +
+stderr "permission-denied". TS matches the stderr substring and maps to
+a typed `CameraCaptureError(code="permission-denied", …)` with a
+user-facing hint. `nchinda_look` propagates — callers can `switch` on
+`err.code`.
+
+**Voice routing additive-only (kill path untouched)?** Yes.
+
+- Precedence in `voice-orchestrator.ts`: `kill > camera-query > task`.
+- `camera-query` only engages when `onCameraQuery` is supplied; otherwise
+  falls through to `onTask` (integration test
+  "camera-query falls through to onTask when no onCameraQuery is wired"
+  proves this).
+- The kill block is untouched: stop TTS, fire killSwitch, audit, return.
+- Camera regexes are anchored (`^`) so embedded mentions
+  ("tell me what do you see when you open the app") still route to
+  `task`. Test-proven.
+
+**Nits**:
+- `nchindaLook` returns `ocr_text` truncated at 2000 chars, but the
+  local-only fallback reuses OCR at 400 chars. Two caps; fine.
+- The camera audit detail includes `bytes=…` but not width/height; the
+  successful write implies both. Low-value field to omit.
+
+### 3.2 phase10/computer-use
+
+**Policy gate really fires BEFORE actuation?** Yes **inside `agent-loop.ts`**:
+```ts
+if (deps.policy.isIrreversible(response.action)) {
+  steps.push(buildStep(i, observation, response, null, now));
+  recordAudit(deps.audit, `escalated step=${i} …`);
+  return finish(task.goal, steps, "escalated");
+}
+// 4. Actuate.
+await actuate(...);
+```
+Test `agent-loop.test.ts` asserts `actuator.actions === []` on escalation
+— real proof, not a claim. **However**: see §2.2 — raw `cu_*` MCP tools
+bypass this check.
+
+**Agent loop has bounded steps AND bounded time?** Yes.
+
+- `task.maxSteps ?? 20` caps the `for` loop.
+- `task.timeBudgetMs ?? 120_000` caps wallclock via `deadline = now() +
+  budget`, re-checked at the top of each iteration.
+- Both bounds proven by tests ("budget-exhausted before first action"
+  via faked `now()`, and "stops after maxSteps with `budget-exhausted`"
+  via a 50-long script + maxSteps=3).
+
+**Text cap enforced?** Yes, belt AND suspenders.
+
+1. `CuTypeInput` zod schema: `z.string().min(1).max(10_000)`.
+2. `Actuator.type` throws `TextTooLongError` if length > 10_000.
+
+If the MCP layer is somehow bypassed, the actuator still refuses.
+
+**No unaudited actions possible?** Mostly. The audit trail is
+comprehensive inside the loop (start, each step, terminal outcome) and
+inside the Actuator (every primitive appends `cu_action`). BUT:
+
+- The raw `cu_*` MCP tools don't themselves append audit; they rely on
+  the Actuator to do it. A `CuTools` wired without an audit-enabled
+  Actuator would silently produce unaudited mouse/keyboard events.
+  Production wiring in `serve-nchinda.mjs` must plumb the AuditLog
+  through. Not visible in this branch — **flag for T1 verification**.
+- `recordAudit` swallows sink errors with `console.warn` — reasonable
+  but means a broken sink silently degrades the "every action audited"
+  invariant.
+
+**Nits**:
+- `OutOfBoundsError` rejects NaN / Infinity / non-integers up front. Good.
+- `Actuator.screenshot()` parses both `path` and `png_path` keys —
+  thoughtful compatibility bridge.
+- `haikuFetch` is the PlanFn seam name; actual planner hits Sonnet not
+  Haiku. Cosmetic inconsistency; inherited from `nchinda-see` convention.
+- `redactGoal()` strips PII-ish chars from goal before audit — nice.
+
+### 3.3 phase12a/comms-drivers
+
+**`quoteAS` applied everywhere user input meets AppleScript?** Yes on the
+three drivers' hot paths.
+- `mail-driver`: `subject`, `body`, `to/cc/bcc`, `draftId`, `messageId`,
+  `query` all `quoteAS`'d.
+- `messages-driver`: `to`, `body`, `chatId`, attachment POSIX paths all
+  `quoteAS`'d.
+- `calendar-driver`: `title`, `calendar`, `location`, `notes`,
+  `attendees` email, `eventId` `quoteAS`'d; dates through typed
+  `isoNoTZ()` helper.
+
+Helper shape: returns the bare inner-escaped string (backslash,
+double-quote, strip `\r\n` → space). Callers wrap in `"…"`. Consistent
+across comms drivers. Correct.
+
+**Irreversible escalation really gates `mail_send` / `messages_send` /
+attendee-invite `calendar_create`?** **NO** — P0 finding. Current code:
+```ts
+async mailSend(raw: unknown) {
+  const input = MailSendInput.parse(raw);
+  await this.deps.escalate({ question: …, level: "question" });
+  return this.deps.mail.send(input.draftId);   // fires unconditionally
+}
+```
+`escalate` returns `{ escalation_id }` — no `approved` flag. Code
+proceeds to `mail.send` regardless of the user's response (even if the
+user never responded). Same for `messagesSend`, `messagesSendGroup`,
+and `calendarCreate` with attendees. This violates VISION §4.P12.3
+"trigger escalation confirmation before firing" directly. Module header
+admits: *"Phase 12a treats the escalation as a best-effort notification;
+gating on the user's answer is Phase 12b scope."* — but VISION did not
+grant that punt. P12b's `EscalationGate.requestConfirmation` returning
+`boolean` is the model to adopt. **Block main-merge on this.**
+
+**AppleScript-injection tests with nasty strings?** Partial coverage.
+Mail driver tests (24 cases) exercise typical flows. No dedicated
+adversarial-input fuzz targeting:
+- embedded `"`, `\`, `\\r`, `\\n`, `\r\n` combinations
+- non-ASCII (RTL, emoji with ZWJ, combining marks)
+- NUL byte attempts
+- AppleScript metachar chains (`\"; do shell script …`)
+
+`quoteAS` itself looks robust (backslash-first then quote, `\r\n` → ` `),
+but "contains expected quoted fragment" style assertions after a fuzz
+would close the barn door before a future `quoteAS` refactor breaks it.
+P12b's finder tests are closer to this pattern; P12a should adopt it.
+
+**Nits**:
+- `calendar-driver.asDate(s)` parses positional substrings of an ISO
+  string — locale/DST hostile in theory. TS `isoNoTZ()` is UTC so
+  practically OK; deserves a test around fall-back DST.
+- `messages-driver.listRecent` returns `[]` always (future Phase 12b
+  chat.db work). Honest stub.
+- `messages-driver.react` is a no-op-with-audit. Don't advertise the
+  capability in public MCP tool descriptions.
+
+### 3.4 phase12b/content-drivers
+
+**`sanitizePath` rejects `..`, symlinks escaping $HOME, NUL bytes?** Yes.
+
+- NUL: `if (input.includes("\0")) throw`.
+- Empty / non-string: `throw`.
+- Non-absolute: `isAbsolute()`.
+- `..` segment: `input.split(sep).some(s => s === "..")` — correctly
+  uses the RAW input (not the normalised one), so
+  `/Users/a/../../etc/passwd` is caught before `normalize()` collapses.
+- Symlink escape: `realpathSync(input)` + `isUnder(resolved,
+  realpathSync(allowedRoot))` with `startsWith(normRoot + sep)`.
+  Test "rejects realpath outside allowedRoot (symlink escape)" injects
+  a `realpathFn` that returns `/etc/passwd` for a path inside $HOME and
+  verifies rejection. Real proof.
+
+**`finder_trash` is escalation-gated?** Yes. `finder.trash` →
+`gateOrThrow()` → `gate.requestConfirmation()` → throws if no gate OR
+user declined. Same gate covers `move` and `rename`. `reveal`, `tag`,
+`listTags` are not gated (reversible; tags removable; reveal read-only).
+
+**Safari `searchHistory` reads the system DB read-only (no mutation
+possible)?** Structurally yes, with a caveat:
+- SQL is a fixed `SELECT … WHERE … LIMIT ?`. Parameters only; no
+  concatenation.
+- LIKE special chars (`%`, `_`, `\`) escaped via `\`.
+- `existsSync(historyDbPath)` guard; `if (!this.sqliteQuery) return []`
+  when injector absent.
+- **BUT**: no runtime invariant forces the injected `SqliteQueryFn` to
+  open with `SQLITE_OPEN_READONLY` / `mode=ro` / `immutable=1`. The
+  JSDoc says "Read-only SQLite query fn"; it's unenforced. Production
+  wiring MUST open read-only — document this explicitly, add a
+  contract test that rejects non-SELECT SQL passed through the fn
+  (defensive, since current code only passes one SELECT).
+
+**Nits**:
+- Two `quoteAS` implementations coexist:
+  - `mail-driver#quoteAS` — returns bare inner (callers wrap).
+  - `safari-driver#quoteAS` — returns `"…"` (wraps).
+  Both correct individually, but divergent. Messages imports from
+  mail-driver; notes/reminders/music/finder import from safari-driver.
+  **Integration (T1) MUST consolidate** — one helper module, single
+  convention. Divergence is a footgun waiting for a refactor.
+- `finder.listTags` runs full `sanitize()` even though it's read-only
+  — you don't want the helper traversing a symlink even to read. Good
+  call.
+- `app-tools-content.ts` is 578 lines (exceeds the 500-line soft limit
+  in `CLAUDE.md`). Candidate to split per-driver.
+- `reminders-driver.dateLiteral()` includes a dead-code prefix
+  `"(current date) + 0 -- will be replaced …\n"`. Cosmetic cleanup.
+
 ## 4. Cross-cutting security pass
 
-- **Shell injection**: _TBD_
-- **AppleScript injection**: _TBD_
-- **Path traversal**: _TBD_
-- **Audit log coverage**: _TBD_
+- **Shell injection**: **clean**. `grep -rn "shell:\\s*true" src/` ⇒ zero
+  hits in reviewed paths. All external-process calls go through
+  `execFile` (Node) or `execFile`-promisified in drivers. The
+  pre-existing sensors (`app-attention`, `focus-violation`,
+  `unsent-drafts`) use an injected `exec(cmd, args[])` wrapper that is
+  also `execFile` under the hood — **verified by reading
+  `app-attention.ts`**, the wrapper imports `execFile` from
+  `node:child_process`. **No caller is passing a shell string.**
+- **AppleScript injection**: **mostly clean**, with one caveat. `grep
+  -rn "osascript.*\\\${" src/apps/ src/perception/` ⇒ zero interpolations
+  directly into `osascript -e`. Every interpolation is into an
+  AppleScript source string variable that is then passed to
+  `execFile("osascript", ["-e", script])`. User fields are `quoteAS`'d
+  everywhere I inspected. Caveat: two divergent `quoteAS` helpers
+  (see §3.4 nit) means a future refactor could break one and the
+  unified tests would not catch it. T1 should consolidate.
+- **Path traversal**: **clean** on Finder's mutating paths (see §3.4).
+  `finder.reveal` is deliberately permissive but NUL + absolute checked.
+  Camera output paths are server-chosen (`randomUUID()` under
+  `~/.cortexos/camera`); screen capture paths similarly server-chosen
+  under the perception module's own tree. No user-controllable output
+  path in P9.
+- **Audit log coverage**: per §7.5 of VISION. Coverage matrix:
+
+  | Capability                          | Audit?  | Action tag       |
+  | ----------------------------------- | ------- | ---------------- |
+  | Camera capture (P9)                 | yes     | `camera_capture` |
+  | Voice intent routing (P9)           | yes     | `voice_intent`   |
+  | CU primitive (actuator-level, P10)  | yes     | `cu_action`      |
+  | CU step / outcome (loop, P10)       | yes     | `cu_action`      |
+  | Mail / Messages / Calendar mutation | yes     | `act_on`         |
+  | Safari / Notes / etc mutation       | yes     | `app_mutation`   |
+  | Escalation decision recorded        | **no**  | —                |
+
+  Audit-action tag drift is an integration concern: `cu_action` vs
+  `act_on` vs `app_mutation` all mean "mutation performed". Consolidate
+  to a single vocabulary in T1 (e.g. `actuator_action`, `driver_action`,
+  `intent_routed`).
+
+## 5. Test quality
+
+- **Mock aggression**: Appropriate. All branches avoid touching real
+  AVFoundation / CoreGraphics / Mail.app / Safari in unit tests by
+  threading an injected bridge or `execFileFn`. `AuditLog` is the real
+  class writing to a tempdir — nice mix of real vs fake.
+- **Failure-path coverage**:
+  - P9: permission-denied, device-unavailable, HTTP 500, ECONNRESET,
+    missing JPEG, bad JSON, stale generation, TTS interruption — all
+    covered.
+  - P10: planner throw → blocked, budget exhaustion (faked clock),
+    maxSteps cap, irreversible → escalated, done/abort planner
+    responses — all covered. Default constants asserted.
+  - P12a: happy paths + zod rejection + default-limit clamping + audit
+    presence — covered. **Missing**: adversarial input fuzz for
+    AppleScript-injection hardening (see §3.3).
+  - P12b: sanitizePath has the best failure-path coverage of the four
+    (NUL, empty, non-absolute, `..` raw, `..` deep, symlink escape via
+    fake realpath, legit path). Notes/Reminders gate-declined tests
+    exist.
+- **Policy escalation proven, not claimed**: YES in P10 (actuator.actions
+  empty on escalation) and P12b (assert on `gate.requestConfirmation`
+  calls). In P12a the tests ASSERT `escalate` was called — but not that
+  the mutation is skipped when the escalation "fails", because in P12a's
+  current design the mutation fires regardless. The test accurately
+  documents the broken contract; the contract needs fixing, not the
+  test.
+- **Integration tests**: P9 ships a voice × camera end-to-end test
+  exercising STT → intent → camera-query → onCameraQuery → TTS. No
+  equivalent end-to-end test for P10 (loop × real actuator × policy)
+  or for P12a (MCP call → escalate → driver). These are exactly the
+  tests T1 should add in integration before main-merge.
 
 ## 5. Test quality
 
