@@ -301,6 +301,81 @@ export const TOOL_DISCOVERY_SCHEMA: McpToolSchema = {
   },
 };
 
+export const SKILL_DISCOVER_SCHEMA: McpToolSchema = {
+  name: "skill_discover",
+  description:
+    "Semantic skill search. Given a natural-language need, returns ranked candidate skills from the registry with slug, description, and confidence.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      need: {
+        type: "string",
+        description: "Natural-language description of what you need a skill to do.",
+        minLength: 1,
+      },
+    },
+    required: ["need"],
+    additionalProperties: false,
+  },
+};
+
+export const SKILL_INSTALL_SCHEMA: McpToolSchema = {
+  name: "skill_install",
+  description:
+    "Install a skill from a GitHub repository. Clones the repo, vets for safety, auto-generates SKILL.md from README if missing, and registers as 'unvetted'. Only accepts https://github.com/ URLs.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo_url: {
+        type: "string",
+        description: "HTTPS GitHub repository URL (must start with https://github.com/).",
+        minLength: 1,
+      },
+      subpath: {
+        type: "string",
+        description: "Optional subdirectory within the repo that contains the skill.",
+      },
+    },
+    required: ["repo_url"],
+    additionalProperties: false,
+  },
+};
+
+export const SKILL_USE_SCHEMA: McpToolSchema = {
+  name: "skill_use",
+  description:
+    "Execute a registered skill by slug. Runs in a sandbox on macOS (deny-default profile). Respects trust levels — quarantined and deprecated skills are rejected. Max timeout 300s.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      slug: {
+        type: "string",
+        description: "The skill's slug identifier.",
+        minLength: 1,
+      },
+      args: {
+        type: "array",
+        items: { type: "string" },
+        description: "Command-line arguments to pass to the skill entrypoint.",
+        default: [],
+      },
+      env: {
+        type: "object",
+        description: "Optional environment variables to set for the skill process.",
+        additionalProperties: { type: "string" },
+      },
+      timeout_s: {
+        type: "integer",
+        description: "Execution timeout in seconds (1..300). Default 30.",
+        minimum: 1,
+        maximum: 300,
+      },
+    },
+    required: ["slug"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -314,4 +389,7 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_ASK_PEER_SCHEMA,
   WEB_SEARCH_SCHEMA,
   TOOL_DISCOVERY_SCHEMA,
+  SKILL_DISCOVER_SCHEMA,
+  SKILL_INSTALL_SCHEMA,
+  SKILL_USE_SCHEMA,
 ];

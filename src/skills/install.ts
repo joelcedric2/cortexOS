@@ -28,7 +28,10 @@ const InstallRequestSchema = z.object({
   skip_vet: z.boolean().default(false),
 });
 
+/** The parsed output type (after defaults are applied). */
 export type InstallRequest = z.infer<typeof InstallRequestSchema>;
+/** The input type (before defaults — subpath/skip_vet optional). */
+export type InstallRequestInput = z.input<typeof InstallRequestSchema>;
 
 export interface InstallResult {
   slug: string;
@@ -112,7 +115,7 @@ function validateSlug(slug: string): void {
 // ----------------------------- Main -----------------------------------------
 
 export async function installSkill(
-  req: InstallRequest,
+  req: InstallRequestInput,
   deps: InstallDeps,
 ): Promise<InstallResult> {
   // 1. Validate input

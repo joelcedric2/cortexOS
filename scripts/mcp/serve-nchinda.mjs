@@ -127,6 +127,15 @@ async function dispatch(name, args, tools) {
         timeoutMs: args?.timeoutMs,
       });
     }
+    case "skill_discover":
+    case "skill_install":
+    case "skill_use": {
+      const { getSkillTools } = await import("../../dist/mcp/skill-tools-wiring.js");
+      const st = await getSkillTools();
+      if (name === "skill_discover") return await st.discover(args);
+      if (name === "skill_install") return await st.install(args);
+      return await st.use(args);
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
