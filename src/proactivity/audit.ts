@@ -20,6 +20,12 @@ import { homedir } from "node:os";
  *   - ocr                — Apple Vision OCR ran on a PNG
  *   - vision_llm         — the vision-brief LLM polish path fired (Haiku)
  *   - voice_intent       — the voice intent extractor routed a transcript
+ *
+ * Phase 12 adds app-driver mutations:
+ *   - app_mutation       — a native-app driver (Safari, Notes, Reminders,
+ *                           Music, Finder, Mail, Calendar, Messages) performed
+ *                           a write (create/update/delete). Irreversible
+ *                           mutations are gated behind an escalation first.
  */
 export type AuditAction =
   | "sensor_sample"
@@ -30,7 +36,8 @@ export type AuditAction =
   | "capture"
   | "ocr"
   | "vision_llm"
-  | "voice_intent";
+  | "voice_intent"
+  | "app_mutation";
 
 export interface AuditEntry {
   /** Action type — see {@link AuditAction}. */

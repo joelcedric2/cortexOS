@@ -681,6 +681,341 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   },
 };
 
+// ────────────────────────── Phase 12 Content-App Tools ─────────────────
+
+export const SAFARI_OPEN_TAB_SCHEMA: McpToolSchema = {
+  name: "safari_open_tab",
+  description:
+    "Open a URL in a new Safari tab (foreground). Activates Safari. Returns the new tab's id.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "http(s) or file:// URL.", minLength: 1 },
+    },
+    required: ["url"],
+    additionalProperties: false,
+  },
+};
+
+export const SAFARI_READ_CURRENT_TAB_SCHEMA: McpToolSchema = {
+  name: "safari_read_current_tab",
+  description:
+    "Read the front Safari tab's URL, title, and (when available) the document's innerText (Reader-like extraction via `do JavaScript`).",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const SAFARI_LIST_TABS_SCHEMA: McpToolSchema = {
+  name: "safari_list_tabs",
+  description: "Enumerate every open Safari tab across windows.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const SAFARI_CLOSE_TAB_SCHEMA: McpToolSchema = {
+  name: "safari_close_tab",
+  description: "Close a Safari tab by id.",
+  inputSchema: {
+    type: "object",
+    properties: { tabId: { type: "string", minLength: 1 } },
+    required: ["tabId"],
+    additionalProperties: false,
+  },
+};
+
+export const SAFARI_LIST_BOOKMARKS_SCHEMA: McpToolSchema = {
+  name: "safari_list_bookmarks",
+  description: "List all Safari bookmarks across folders.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const SAFARI_SEARCH_HISTORY_SCHEMA: McpToolSchema = {
+  name: "safari_search_history",
+  description:
+    "Full-text-ish search over Safari's local History.db. Matches URL or title; results ordered by most recent visit.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", minLength: 1 },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+export const NOTES_APPEND_SCHEMA: McpToolSchema = {
+  name: "notes_append",
+  description:
+    "Append text to a Notes.app note by title. Creates the note if it doesn't exist in the given folder (defaults to the default folder).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      noteTitle: { type: "string", minLength: 1 },
+      text: { type: "string", minLength: 1 },
+      folder: { type: "string" },
+    },
+    required: ["noteTitle", "text"],
+    additionalProperties: false,
+  },
+};
+
+export const NOTES_CREATE_SCHEMA: McpToolSchema = {
+  name: "notes_create",
+  description: "Create a new note with title + body in Notes.app.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: { type: "string", minLength: 1 },
+      body: { type: "string" },
+      folder: { type: "string" },
+    },
+    required: ["title", "body"],
+    additionalProperties: false,
+  },
+};
+
+export const NOTES_SEARCH_SCHEMA: McpToolSchema = {
+  name: "notes_search",
+  description: "Substring-match over Notes.app notes (title and plaintext).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", minLength: 1 },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+export const NOTES_DELETE_SCHEMA: McpToolSchema = {
+  name: "notes_delete",
+  description:
+    "Delete a note by id. Always requires human confirmation — the handler raises an escalation first.",
+  inputSchema: {
+    type: "object",
+    properties: { noteId: { type: "string", minLength: 1 } },
+    required: ["noteId"],
+    additionalProperties: false,
+  },
+};
+
+export const REMINDERS_ADD_SCHEMA: McpToolSchema = {
+  name: "reminders_add",
+  description:
+    "Add a reminder. Priority is 0 (none), 1 (high), 5 (medium), 9 (low) — same encoding as Reminders.app.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: { type: "string", minLength: 1 },
+      dueAt: { type: "string", description: "ISO-8601 UTC date-time." },
+      list: { type: "string" },
+      notes: { type: "string" },
+      priority: { type: "integer", enum: [0, 1, 5, 9] },
+    },
+    required: ["title"],
+    additionalProperties: false,
+  },
+};
+
+export const REMINDERS_COMPLETE_SCHEMA: McpToolSchema = {
+  name: "reminders_complete",
+  description: "Mark a reminder as completed.",
+  inputSchema: {
+    type: "object",
+    properties: { reminderId: { type: "string", minLength: 1 } },
+    required: ["reminderId"],
+    additionalProperties: false,
+  },
+};
+
+export const REMINDERS_LIST_SCHEMA: McpToolSchema = {
+  name: "reminders_list",
+  description: "List reminders, optionally filtered to a specific list.",
+  inputSchema: {
+    type: "object",
+    properties: { listName: { type: "string" } },
+    additionalProperties: false,
+  },
+};
+
+export const REMINDERS_REMOVE_SCHEMA: McpToolSchema = {
+  name: "reminders_remove",
+  description:
+    "Delete a reminder. Requires human confirmation — the handler raises an escalation first.",
+  inputSchema: {
+    type: "object",
+    properties: { reminderId: { type: "string", minLength: 1 } },
+    required: ["reminderId"],
+    additionalProperties: false,
+  },
+};
+
+export const MUSIC_PLAY_SCHEMA: McpToolSchema = {
+  name: "music_play",
+  description:
+    "Play in Music.app. With `query`, searches tracks/artists and plays the first match; without, resumes playback.",
+  inputSchema: {
+    type: "object",
+    properties: { query: { type: "string" } },
+    additionalProperties: false,
+  },
+};
+
+export const MUSIC_PAUSE_SCHEMA: McpToolSchema = {
+  name: "music_pause",
+  description: "Pause playback in Music.app.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const MUSIC_SKIP_SCHEMA: McpToolSchema = {
+  name: "music_skip",
+  description: "Skip to the next track in Music.app.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const MUSIC_QUEUE_SCHEMA: McpToolSchema = {
+  name: "music_queue",
+  description:
+    "Queue a matching track for later playback. Errors if no library track matches the name.",
+  inputSchema: {
+    type: "object",
+    properties: { track: { type: "string", minLength: 1 } },
+    required: ["track"],
+    additionalProperties: false,
+  },
+};
+
+export const MUSIC_SET_VOLUME_SCHEMA: McpToolSchema = {
+  name: "music_set_volume",
+  description: "Set Music.app's internal sound volume (0..100, rounded).",
+  inputSchema: {
+    type: "object",
+    properties: { pct: { type: "number", minimum: 0, maximum: 100 } },
+    required: ["pct"],
+    additionalProperties: false,
+  },
+};
+
+export const MUSIC_CURRENTLY_PLAYING_SCHEMA: McpToolSchema = {
+  name: "music_currently_playing",
+  description:
+    "Return the currently playing track (title/artist/album) or null when stopped/paused.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export const FINDER_REVEAL_SCHEMA: McpToolSchema = {
+  name: "finder_reveal",
+  description:
+    "Open a Finder window selecting the given path. Read-only, no escalation.",
+  inputSchema: {
+    type: "object",
+    properties: { path: { type: "string", minLength: 1 } },
+    required: ["path"],
+    additionalProperties: false,
+  },
+};
+
+export const FINDER_MOVE_SCHEMA: McpToolSchema = {
+  name: "finder_move",
+  description:
+    "Move a file/folder via Finder. Requires human confirmation; path-traversal and symlink-escape checked.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      from: { type: "string", minLength: 1 },
+      to: { type: "string", minLength: 1 },
+    },
+    required: ["from", "to"],
+    additionalProperties: false,
+  },
+};
+
+export const FINDER_RENAME_SCHEMA: McpToolSchema = {
+  name: "finder_rename",
+  description:
+    "Rename a file/folder. Requires human confirmation; newName cannot contain / or NUL.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", minLength: 1 },
+      newName: { type: "string", minLength: 1 },
+    },
+    required: ["path", "newName"],
+    additionalProperties: false,
+  },
+};
+
+export const FINDER_TAG_SCHEMA: McpToolSchema = {
+  name: "finder_tag",
+  description: "Set the Finder tags on a file/folder (replaces existing tags).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", minLength: 1 },
+      tags: {
+        type: "array",
+        items: { type: "string", minLength: 1 },
+        maxItems: 32,
+      },
+    },
+    required: ["path", "tags"],
+    additionalProperties: false,
+  },
+};
+
+export const FINDER_LIST_TAGS_SCHEMA: McpToolSchema = {
+  name: "finder_list_tags",
+  description: "Read the Finder tags attached to a file/folder.",
+  inputSchema: {
+    type: "object",
+    properties: { path: { type: "string", minLength: 1 } },
+    required: ["path"],
+    additionalProperties: false,
+  },
+};
+
+export const FINDER_TRASH_SCHEMA: McpToolSchema = {
+  name: "finder_trash",
+  description:
+    "Move a file/folder to the Trash. Requires human confirmation; path-traversal + symlink-escape checked.",
+  inputSchema: {
+    type: "object",
+    properties: { path: { type: "string", minLength: 1 } },
+    required: ["path"],
+    additionalProperties: false,
+  },
+};
+
+/** Phase 12 content-half schema bundle — appended to NCHINDA_TOOL_SCHEMAS below. */
+export const PHASE12_CONTENT_SCHEMAS: McpToolSchema[] = [
+  SAFARI_OPEN_TAB_SCHEMA,
+  SAFARI_READ_CURRENT_TAB_SCHEMA,
+  SAFARI_LIST_TABS_SCHEMA,
+  SAFARI_CLOSE_TAB_SCHEMA,
+  SAFARI_LIST_BOOKMARKS_SCHEMA,
+  SAFARI_SEARCH_HISTORY_SCHEMA,
+  NOTES_APPEND_SCHEMA,
+  NOTES_CREATE_SCHEMA,
+  NOTES_SEARCH_SCHEMA,
+  NOTES_DELETE_SCHEMA,
+  REMINDERS_ADD_SCHEMA,
+  REMINDERS_COMPLETE_SCHEMA,
+  REMINDERS_LIST_SCHEMA,
+  REMINDERS_REMOVE_SCHEMA,
+  MUSIC_PLAY_SCHEMA,
+  MUSIC_PAUSE_SCHEMA,
+  MUSIC_SKIP_SCHEMA,
+  MUSIC_QUEUE_SCHEMA,
+  MUSIC_SET_VOLUME_SCHEMA,
+  MUSIC_CURRENTLY_PLAYING_SCHEMA,
+  FINDER_REVEAL_SCHEMA,
+  FINDER_MOVE_SCHEMA,
+  FINDER_RENAME_SCHEMA,
+  FINDER_TAG_SCHEMA,
+  FINDER_LIST_TAGS_SCHEMA,
+  FINDER_TRASH_SCHEMA,
+];
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -712,4 +1047,5 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   WM_FOCUS_SCHEMA,
   WM_SPACE_SWITCH_SCHEMA,
   WM_LIST_WINDOWS_SCHEMA,
+  ...PHASE12_CONTENT_SCHEMAS,
 ];
