@@ -9,16 +9,19 @@
  *              calendar_list_upcoming
  *
  * All inputs are zod-validated. Irreversible actions fire an
- * escalation callback BEFORE the driver mutates state:
+ * escalation callback BEFORE the driver mutates state and only
+ * proceed when the user approves:
  *   - mail_send                                → always
  *   - messages_send, messages_send_group       → always
  *   - calendar_create with at least 1 attendee → only then
  *
  * Callers inject the escalation function (typically
- * `NchindaCoordination.escalate`). The tool layer records that the
- * confirmation fired in the audit trail and proceeds — Phase 12a
- * treats the escalation as a best-effort notification; gating on the
- * user's answer is Phase 12b scope.
+ * `NchindaCoordination.escalate`). The escalator MUST return an
+ * `approved: boolean` so the tool layer can skip the irreversible
+ * action when the user denies. When denied, the tool returns
+ * `{ ok: false, reason: "user-denied" }` without firing the driver
+ * mutation. This is the same contract that P12b uses via
+ * `EscalationGate.requestConfirmation`.
  */
 import { z } from "zod";
 import type { MailDriver } from "../apps/mail-driver.js";
@@ -29,14 +32,37 @@ import type { CalendarDriver } from "../apps/calendar-driver.js";
 /*  Escalation dep                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Escalation result shape. `approved` is what the tool layer gates
+ * on; `escalation_id` is kept for audit back-references. Adopts the
+ * same boolean-gate contract as P12b's `EscalationGate
+ * .requestConfirmation(...)` — when `approved === false`, the
+ * irreversible driver action is skipped entirely.
+ */
+export interface EscalationResult {
+  approved: boolean;
+  escalation_id?: string;
+}
+
 export interface CommsEscalator {
   (args: {
     question: string;
     level?: "info" | "question" | "blocker" | "ask";
     task_id?: string;
     agent_id?: string;
-  }): Promise<{ escalation_id: string }> | { escalation_id: string };
+  }): Promise<EscalationResult> | EscalationResult;
 }
+
+/** Returned when the user declines the escalation prompt. */
+export interface UserDenied {
+  readonly ok: false;
+  readonly reason: "user-denied";
+}
+
+const USER_DENIED: UserDenied = Object.freeze({
+  ok: false,
+  reason: "user-denied",
+});
 
 /* ------------------------------------------------------------------ */
 /*  Dependency bundle                                                  */
@@ -179,10 +205,11 @@ export class AppCommsTools {
 
   async mailSend(raw: unknown) {
     const input = MailSendInput.parse(raw);
-    await this.deps.escalate({
+    const decision = await this.deps.escalate({
       question: `Send the queued mail draft ${input.draftId}?`,
       level: "question",
     });
+    if (!decision.approved) return USER_DENIED;
     return this.deps.mail.send(input.draftId);
   }
 
@@ -218,10 +245,11 @@ export class AppCommsTools {
 
   async messagesSend(raw: unknown) {
     const input = MessagesSendInput.parse(raw);
-    await this.deps.escalate({
+    const decision = await this.deps.escalate({
       question: `Send iMessage to ${input.to}?`,
       level: "question",
     });
+    if (!decision.approved) return USER_DENIED;
     await this.deps.messages.send(
       input.to,
       input.body,
@@ -232,10 +260,11 @@ export class AppCommsTools {
 
   async messagesSendGroup(raw: unknown) {
     const input = MessagesSendGroupInput.parse(raw);
-    await this.deps.escalate({
+    const decision = await this.deps.escalate({
       question: `Send iMessage to group chat ${input.chatId}?`,
       level: "question",
     });
+    if (!decision.approved) return USER_DENIED;
     await this.deps.messages.sendGroup(input.chatId, input.body);
     return { ok: true as const };
   }
@@ -262,12 +291,13 @@ export class AppCommsTools {
     const input = CalendarCreateInput.parse(raw);
     const hasAttendees = (input.attendees?.length ?? 0) > 0;
     if (hasAttendees) {
-      await this.deps.escalate({
+      const decision = await this.deps.escalate({
         question:
           `Create calendar event "${input.title}" and invite ` +
           `${input.attendees!.length} attendee(s)?`,
         level: "question",
       });
+      if (!decision.approved) return USER_DENIED;
     }
     return this.deps.calendar.createEvent({
       title: input.title,

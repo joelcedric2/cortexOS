@@ -143,6 +143,7 @@ interface EscalatorRecorder {
   fn: CommsEscalator;
   calls: Array<{ question: string; level?: string }>;
   shouldThrow?: boolean;
+  approved?: boolean; // defaults true
 }
 
 function makeEscalator(): EscalatorRecorder {
@@ -152,7 +153,10 @@ function makeEscalator(): EscalatorRecorder {
     fn: async ({ question, level }) => {
       calls.push({ question, ...(level ? { level } : {}) });
       if (rec.shouldThrow) throw new Error("user rejected");
-      return { escalation_id: `esc-${calls.length}` };
+      return {
+        approved: rec.approved ?? true,
+        escalation_id: `esc-${calls.length}`,
+      };
     },
   };
   return rec;
@@ -218,7 +222,7 @@ describe("AppCommsTools — mail round-trip", () => {
     esc.fn = async (a) => {
       order.push("escalate");
       esc.calls.push({ question: a.question, level: a.level });
-      return { escalation_id: "x" };
+      return { approved: true, escalation_id: "x" };
     };
     const tools = createAppCommsTools({
       mail: mail.driver,
@@ -273,7 +277,7 @@ describe("AppCommsTools — messages round-trip", () => {
     esc.fn = async (a) => {
       order.push("escalate");
       esc.calls.push({ question: a.question });
-      return { escalation_id: "e" };
+      return { approved: true, escalation_id: "e" };
     };
     const tools = createAppCommsTools({
       mail: makeFakeMail().driver,
@@ -343,7 +347,7 @@ describe("AppCommsTools — calendar round-trip", () => {
     esc.fn = async (a) => {
       order.push("escalate");
       esc.calls.push({ question: a.question });
-      return { escalation_id: "e" };
+      return { approved: true, escalation_id: "e" };
     };
     const tools = createAppCommsTools({
       mail: makeFakeMail().driver,
@@ -383,6 +387,57 @@ describe("AppCommsTools — calendar round-trip", () => {
     assert.equal(rows.length, 1);
     assert.deepEqual(h.calendar[0].args, [120]);
     assert.equal(h.escalator.calls.length, 0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Escalation denial — the gate MUST skip the driver mutation        */
+/* ------------------------------------------------------------------ */
+
+describe("AppCommsTools — escalation denial blocks the mutation", () => {
+  it("mail_send returns {ok:false, reason:'user-denied'} + no driver.send fires", async () => {
+    const h = buildHarness();
+    h.escalator.approved = false;
+    const result = await h.tools.mailSend({ draftId: "d9" });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    // Exactly zero driver calls — escalate was called, but send was NOT.
+    assert.equal(h.escalator.calls.length, 1);
+    assert.equal(h.mail.length, 0);
+  });
+
+  it("messages_send denied → no driver.send fires", async () => {
+    const h = buildHarness();
+    h.escalator.approved = false;
+    const result = await h.tools.messagesSend({ to: "+1555", body: "hi" });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    assert.equal(h.escalator.calls.length, 1);
+    assert.equal(h.messages.length, 0);
+  });
+
+  it("messages_send_group denied → no driver.sendGroup fires", async () => {
+    const h = buildHarness();
+    h.escalator.approved = false;
+    const result = await h.tools.messagesSendGroup({
+      chatId: "c42",
+      body: "team!",
+    });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    assert.equal(h.escalator.calls.length, 1);
+    assert.equal(h.messages.length, 0);
+  });
+
+  it("calendar_create with attendees denied → no driver.createEvent fires", async () => {
+    const h = buildHarness();
+    h.escalator.approved = false;
+    const result = await h.tools.calendarCreate({
+      title: "sync",
+      start: "2026-04-15T09:00:00",
+      end: "2026-04-15T10:00:00",
+      attendees: ["a@x.com"],
+    });
+    assert.deepEqual(result, { ok: false, reason: "user-denied" });
+    assert.equal(h.escalator.calls.length, 1);
+    assert.equal(h.calendar.length, 0);
   });
 });
 

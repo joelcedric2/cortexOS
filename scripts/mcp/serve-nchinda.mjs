@@ -283,7 +283,17 @@ async function dispatch(name, args, tools) {
         mail,
         messages,
         calendar,
-        escalate: (a) => tools.coordination.escalate(a),
+        // Adapter: `coordination.escalate` currently returns only
+        // `{ escalation_id }` and fires an event-bus question the
+        // user answers asynchronously. Until the synchronous-confirm
+        // plumbing lands, the raised escalation_id is treated as
+        // approval (preserves existing behaviour). `runtime
+        // .commsEscalator` is the seam where production wiring will
+        // inject a blocking confirm path.
+        escalate: runtime.commsEscalator ?? (async (a) => {
+          const r = await tools.coordination.escalate(a);
+          return { approved: true, escalation_id: r.escalation_id };
+        }),
       });
       switch (name) {
         case "mail_compose":          return await comms.mailCompose(args);
