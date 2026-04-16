@@ -25,6 +25,9 @@ import { homedir } from "node:os";
  *   - camera_capture     — a single AVFoundation frame was captured
  *   - camera_llm         — Claude Sonnet vision polish path fired for a camera frame
  *
+ * Phase 9.5 upgrades single-still camera to multi-keyframe short clips:
+ *   - camera_clip        — a short video clip was recorded and keyframes extracted
+ *
  * Phase 12 adds app-driver mutations:
  *   - app_mutation       — a native-app driver (Safari, Notes, Reminders,
  *                           Music, Finder, Mail, Calendar, Messages) performed
@@ -47,6 +50,7 @@ export type AuditAction =
   | "voice_intent"
   | "camera_capture"
   | "camera_llm"
+  | "camera_clip"
   | "app_mutation"
   | "cu_action";
 

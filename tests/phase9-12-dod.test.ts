@@ -90,11 +90,11 @@ describe("DoD P9 — nchinda_look + voice camera routing", () => {
       );
 
     const result = await nchindaLook(
-      { question: "what am I looking at" },
+      { question: "what am I looking at", mode: "still" },
       { capture, ocr, haikuFetch, apiKey: "dod-test-key" },
     );
 
-    assert.equal(result.frame.id, "p9-dod-frame-1", "frame.id round-trips");
+    assert.equal(result.frame!.id, "p9-dod-frame-1", "frame.id round-trips");
     assert.match(result.description, /coffee shop/i);
     assert.equal(result.ocr_text, "COFFEE SHOP MENU");
   });

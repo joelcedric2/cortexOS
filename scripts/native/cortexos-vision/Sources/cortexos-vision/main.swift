@@ -4,6 +4,7 @@
 //   capture         [--app <bundle-id>] [--out <path>]
 //   ocr             --image <path>
 //   camera-capture  --out <path> [--device front|back|continuity]
+//   camera-record   --out <path> [--duration 10] [--device front|back|continuity]
 //   input           click|double-click|move|type|scroll|screenshot
 //   ax              find|findAll
 //   ax-watch        --app <bundle-id> [--text-role]
@@ -34,6 +35,8 @@ struct CortexOSVision {
                 try await OCRCommand.run(args: rest)
             case "camera-capture":
                 try await CameraCommand.run(args: rest)
+            case "camera-record":
+                try await CameraRecordCommand.run(args: rest)
             case "input":
                 try await InputCommand.run(args: rest)
             case "ax":
@@ -64,6 +67,7 @@ struct CortexOSVision {
           cortexos-vision capture [--app <bundle-id>] [--out <path>]
           cortexos-vision ocr --image <path>
           cortexos-vision camera-capture --out <path> [--device front|back|continuity]
+          cortexos-vision camera-record  --out <path> [--duration 10] [--device front|back|continuity]
           cortexos-vision input click        --x <n> --y <n> [--button left|right]
           cortexos-vision input double-click --x <n> --y <n>
           cortexos-vision input move         --x <n> --y <n>

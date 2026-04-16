@@ -708,14 +708,14 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
 export const NCHINDA_LOOK_SCHEMA: McpToolSchema = {
   name: "nchinda_look",
   description:
-    "Capture ONE frame from the physical camera (front / back / continuity) and return a short description of what the camera sees, plus any OCR'd text. Optionally answer a user question about the frame using Claude Sonnet vision. Strictly one-shot — no loop. Falls back to a local-only reply when the LLM is unavailable.",
+    "Capture video from the physical camera (front / back / continuity) and describe the scene. Default mode is 'clip' (10s recording → keyframes → multi-image Sonnet). Use 'still' for a single-frame one-shot. Falls back to a local-only reply when the LLM is unavailable.",
   inputSchema: {
     type: "object",
     properties: {
       question: {
         type: "string",
         description:
-          "Optional user question about the frame (e.g. \"what am I looking at?\"). Max 2000 chars.",
+          "Optional user question about the scene (e.g. \"what am I looking at?\"). Max 2000 chars.",
         minLength: 1,
         maxLength: 2000,
       },
@@ -724,6 +724,12 @@ export const NCHINDA_LOOK_SCHEMA: McpToolSchema = {
         enum: ["front", "back", "continuity"],
         description:
           "Physical camera to use. `continuity` is iPhone-as-webcam via Continuity Camera. Defaults to `front`.",
+      },
+      mode: {
+        type: "string",
+        enum: ["clip", "still"],
+        description:
+          "Capture mode. `clip` (default) records a 10s clip and extracts keyframes for richer temporal context. `still` captures a single frame.",
       },
     },
     additionalProperties: false,
