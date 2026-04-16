@@ -456,12 +456,70 @@ _TBD — mock aggression, failure-path coverage, policy proof_
 
 ## 6. Top 5 patches before merge to main
 
-1. _TBD_
-2. _TBD_
-3. _TBD_
-4. _TBD_
-5. _TBD_
+1. **P12a: make escalation actually gate** (P0, spec-drift). Change
+   `CommsEscalator` return type to include an `approved: boolean` (or
+   switch to P12b's `EscalationGate.requestConfirmation(question, ctx)
+   → Promise<boolean>` contract) and have every `mail_send`,
+   `messages_send`, `messages_send_group`, and attendee-invite
+   `calendar_create` branch throw / skip-mutation when
+   `approved === false`. Update the module header comment that
+   currently codifies the wrong behaviour.
+2. **P10: mediate `cu_*` MCP tools with a policy gate**. Either
+   (a) make `CuTools` require a `policy: LoopPolicy` dep and gate
+   `type` / `click-in-irreversible-region` / etc at the MCP boundary,
+   or (b) narrow the public surface to "unmediated only when called
+   through `agent-loop`" by wrapping the MCP registrations so they
+   MUST go through the loop. Current unmediated surface lets a prompt-
+   injected planner issue `cu_type` with arbitrary text directly.
+3. **Integration (T1): consolidate `quoteAS` to one helper module**.
+   `src/apps/quote-as.ts` (or under `src/native/`) exporting a single
+   convention (I recommend the P12b "wraps in `\"…\"`" variant — it
+   reads cleaner at callsites). Migrate mail/messages/calendar to it
+   in the same commit, with a regression test that pins the escape
+   behaviour. Divergent helpers are a silent footgun.
+4. **P10: plumb AuditLog through the `cu_*` MCP wiring**. Ensure the
+   `serve-nchinda.mjs` case that constructs `CuTools` passes an
+   Actuator built with `{audit: runtime.auditLog}`. Add an integration
+   test that exercises the MCP call path and asserts an audit line
+   per primitive.
+5. **P12a: adversarial `quoteAS` fuzz tests**. Add a `apps/
+   quote-as-hardening.test.ts` that feeds nasty strings (embedded `"`,
+   `\`, `\r\n`, `\r\n\r\n`, non-ASCII, zero-width, emoji with ZWJ,
+   `\"; do shell script "…"`) through `mail.compose`, `messages.send`,
+   `calendar.createEvent`, and asserts the resulting AppleScript
+   source (a) is still a single-line literal and (b) contains the
+   intended user content as a correctly escaped string. This closes
+   the barn door before the `quoteAS` consolidation in patch 3.
 
 ## 7. Follow-ups for later phases
 
-_TBD_
+- **Safari History read-only enforcement**. When wiring the SqliteQueryFn
+  in production, open `~/Library/Safari/History.db` with
+  `?immutable=1&mode=ro` (URI-filename form) — and document in the
+  driver's JSDoc. Related: consider snapshotting the DB path before
+  reading (Safari writes live).
+- **"Take over" voice intent** (VISION §4.P10.5). Not in this branch.
+  P10 → P14 integration should add a `takeover` intent kind to the
+  voice extractor and route it to a short-lived computer-use session
+  with the Activity Journal wired to each step's audit line.
+- **Audit-action vocabulary**. Three tags (`cu_action`, `act_on`,
+  `app_mutation`) all mean "mutation performed". Consolidate to
+  `{ category: "actuator" | "driver" | "capture" | "voice_intent",
+  op: string }` during T1 integration. Rolls forward into Phase 11+12
+  where the list will grow.
+- **Finder `reveal` policy**. Allowing reveal outside $HOME is
+  documented and low-risk, but a privacy-conscious user might want
+  the "private apps allowlist" from VISION §7.7 to intersect with
+  reveal too (e.g. reject reveal on `~/.ssh` or encrypted disk
+  images). Phase 12.1 candidate.
+- **Messages.app reactions + listRecent**. Phase 12a stubs these out
+  with a comment. Wire through the chat.db reader and UI Scripting
+  for reactions when Phase 12b matures.
+- **CU cliclick fallback**. VISION mentions it but the branch ships
+  pure CoreGraphics. Acceptable for M1; add only if users report
+  `kAXErrorAPIDisabled` under corporate-MDM environments.
+- **Reviewer 1 round-2 on `phase9-12/integration`**. T1 is in flight
+  with only the P12b diff landed. Re-run §4/§5 checks once all four
+  branches have been folded in, with special attention to
+  `serve-nchinda.mjs` case collisions, `tool-schema.ts` merges, and
+  the audit-action vocabulary consolidation.
