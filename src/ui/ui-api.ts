@@ -21,6 +21,11 @@ import type { BriefStore } from "../research/brief-store.js";
 import type { SkillRegistryDB } from "../skills/skill-registry-db.js";
 import type { CronJobsDB } from "../scheduler/cron-jobs-db.js";
 import type { AuditLog } from "../proactivity/audit.js";
+import type { BudgetTracker } from "../observability/budget-tracker.js";
+import {
+  handleBudgetsList,
+  handleBudgetsTotals,
+} from "../observability/budget-api.js";
 import type { BriefRow } from "./types.js";
 
 export interface UIApiOptions {
@@ -36,6 +41,8 @@ export interface UIApiOptions {
   cronDb?: CronJobsDB;
   /** Powers GET /ui/audit?date=YYYY-MM-DD. */
   auditLog?: AuditLog;
+  /** Powers GET /ui/budgets and GET /ui/budgets/totals?days=<n>. */
+  budgetTracker?: BudgetTracker;
   /** Optional logger for server-side diagnostics. Defaults to console.warn. */
   logger?: (msg: string, err?: unknown) => void;
 }
@@ -47,6 +54,8 @@ const ROUTES = [
   "GET /ui/skills",
   "GET /ui/crons",
   "GET /ui/audit",
+  "GET /ui/budgets",
+  "GET /ui/budgets/totals",
   "GET /ui/health",
 ] as const;
 
@@ -78,6 +87,7 @@ export class UIApiServer {
   private readonly skillRegistry?: SkillRegistryDB;
   private readonly cronDb?: CronJobsDB;
   private readonly auditLog?: AuditLog;
+  private readonly budgetTracker?: BudgetTracker;
   private readonly logger: (msg: string, err?: unknown) => void;
 
   private server: HttpServer | null = null;
@@ -91,6 +101,7 @@ export class UIApiServer {
     this.skillRegistry = opts.skillRegistry;
     this.cronDb = opts.cronDb;
     this.auditLog = opts.auditLog;
+    this.budgetTracker = opts.budgetTracker;
     this.logger =
       opts.logger ??
       ((msg, err) => {
@@ -161,6 +172,10 @@ export class UIApiServer {
         return this.handleCrons(res);
       case "/ui/audit":
         return this.handleAudit(res, params);
+      case "/ui/budgets":
+        return this.handleBudgets(res);
+      case "/ui/budgets/totals":
+        return this.handleBudgetsTotals(res, params);
       case "/ui/health":
         return this.handleHealth(res);
       default:
@@ -258,6 +273,41 @@ export class UIApiServer {
     } catch (err) {
       this.logger("GET /ui/audit failed", err);
       this.sendError(res, 500, "Failed to summarise audit log");
+    }
+  }
+
+  private handleBudgets(res: ServerResponse): void {
+    if (!this.budgetTracker) {
+      this.sendJson(res, 200, []);
+      return;
+    }
+    try {
+      const result = handleBudgetsList(this.budgetTracker);
+      this.sendJson(res, result.status, result.body);
+    } catch (err) {
+      this.logger("GET /ui/budgets failed", err);
+      this.sendError(res, 500, "Failed to list budgets");
+    }
+  }
+
+  private handleBudgetsTotals(
+    res: ServerResponse,
+    params: Record<string, string>,
+  ): void {
+    if (!this.budgetTracker) {
+      this.sendJson(res, 200, { tokens_in: 0, tokens_out: 0, cost_usd: 0 });
+      return;
+    }
+    try {
+      const result = handleBudgetsTotals(this.budgetTracker, params);
+      if (result.status === 400) {
+        this.sendError(res, 400, result.body.error);
+        return;
+      }
+      this.sendJson(res, result.status, result.body);
+    } catch (err) {
+      this.logger("GET /ui/budgets/totals failed", err);
+      this.sendError(res, 500, "Failed to compute budget totals");
     }
   }
 
