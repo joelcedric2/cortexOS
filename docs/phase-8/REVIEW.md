@@ -288,19 +288,169 @@ The `cortexos-vision capture` and `cortexos-vision ocr` subcommands accept `--ou
 
 ## 6. Test quality
 
-_TBD — filled in commit #5._
+### 6.1 Coverage by branch
+
+| Branch | Test file(s) | Count | Mocks vs. real behaviour | Failure-path coverage |
+|---|---|---|---|---|
+| C1 | **none committed** | 0 | N/A | N/A |
+| C2 | none | 0 | N/A | N/A |
+| C3 | `tests/layouts.test.ts` | 17 | Pure — no mocks needed; tests the real math directly. Exemplary. | ✅ n=0, negative n, non-integer n, zero-size viewport, over-capacity cycling, clone independence. |
+| C4 | none | 0 | N/A | N/A |
+| `main` (baseline) | 178 suites / 921 tests | 921 | Mostly in-process mocks; good discipline. | — |
+
+### 6.2 C3 test assessment (the one suite that exists)
+
+- **Mocks vs. real:** Zero mocks — appropriate because `layouts.ts` is pure. Tests call the real function and assert geometry. This is the right approach; any mock here would be over-engineering.
+- **Failure paths:** `n < 0` throws `RangeError` (asserted), `n` non-integer throws (asserted), zero-viewport returns zero-area slots (asserted). Missing: what happens with `Number.NaN`? (Not tested; `Number.isInteger(NaN)` is `false`, so it correctly throws, but an explicit test would document intent.)
+- **Property-based gap:** Every test is example-based. Since the function is pure and the invariants are strong (coverage of viewport = sum of slot areas, no overlap), a `fast-check` property test like `forall(viewport, n ≤ capacity) ⇒ slots tile exactly` would catch regressions far better than 17 examples. Non-blocking, nice-to-have.
+
+### 6.3 Orphaned test files observed
+
+During review, two uncommitted test files surfaced in a working tree:
+`tests/screen-capture.test.ts` and `tests/yabai-bridge.test.ts`. Both were
+seen during a previous `git status` but neither is in any branch. They
+describe the *correct* shape of the missing implementations
+(`ScreenCapturer` with `forceOff()`, `DEFAULT_PRIVATE_APPS`,
+`PrivateAppSkippedError`, `purge(olderThanSec)`; `createYabaiDriver(exec)`
+with `WMUnavailableError` + `YabaiCommandError`). Tester 1 appears to have
+written them as a spec-from-tests exercise but Coders 1/3 never picked them
+up. **These files should either be committed with their implementations or
+explicitly deleted — leaving them as untracked is a footgun for merge-day.**
+
+### 6.4 Integration branch test status
+
+- `phase8-11/integration` does not carry `src/perception/` or
+  `src/window-manager/` yet (no merges happened).
+- Running the full suite on `phase8-11/integration` currently yields
+  exactly what `main` does (921/921 green) — **because no integration has
+  occurred**. This is not evidence of health; it is evidence of missing
+  work. After C1 + C3 are merged and before C2 + C4 are written, the
+  expected test count is `921 + 17 = 938`. That's the floor number
+  integration must show before the next coder cycle starts.
 
 ## 7. Design smells
 
-_TBD — filled in commit #5._
+1. **"Branch-as-placeholder" pattern.** Two of four coder branches ship zero
+   code while claiming the name of a deliverable. This pattern let C2/C4 slip
+   for a full cycle undetected. Recommend: the integration-notes template
+   should require a "last-code-commit ≠ plan-doc" precondition before an
+   integration window opens.
+2. **Stub files referenced but never committed.** `INTEGRATION_NOTES.md`
+   plans to "kill `_c1-stub.ts` after C2 merge" and "kill `_c3-stub.ts`
+   after C4 merge" — but neither stub was ever committed to the integration
+   branch. Either the stubs should be real (committed, typed, with `TODO:
+   implement in C2/C4`) so merges have a seam to replace, or the plan
+   should drop the stub-kill step.
+3. **Privacy enforcement lives in modules that don't exist.** §7 is the
+   strictest section of the spec and depends entirely on `screen-capture.ts`
+   (allowlist, ring buffer, kill-switch) and `vision-brief.ts` (no-network
+   in local-only, private-app LLM block). When those files are absent, §7
+   is a promise without a guardian. A `tests/phase8-privacy.dod.test.ts`
+   that fails loudly when these modules are missing — asserting the exports
+   exist, asserting grep-cleanness, asserting the allowlist contains the
+   required bundle IDs — would make the gap visible on every CI run.
+4. **C1's Swift helper has no back-channel to the allowlist.** Even when
+   `screen-capture.ts` lands, the Swift helper *already* wrote a PNG to
+   disk before the TS layer can check the allowlist. A robust design
+   passes the deny-list to the helper as `--deny-bundle-id ...` arguments
+   and lets the helper short-circuit before `SCScreenshotManager.captureImage`.
+   Today's design leaks one PNG per skipped capture to `$TMPDIR` between
+   the Swift emit and the TS delete.
+5. **Inconsistent storage location.** Swift emits to `NSTemporaryDirectory()`
+   when `--out` is absent; the spec implies `~/.cortexos/screens/` as the
+   canonical home. The TS layer in WIP uses the canonical path but the
+   helper still falls back to tmp if called directly. Pick one and enforce.
+6. **`NativeBridgeUnavailableError` is caught as `ENOENT` only.** If the
+   binary exists but is not executable (chmod 644), `execFile` will fail
+   with `EACCES` — which maps to `NativeBridgeError`, not
+   `NativeBridgeUnavailableError`. Users installing on a shared disk where
+   `cp` dropped exec bits will get a confusing error. Low priority.
 
 ## 8. Top 5 patches before merging `phase8-11/integration` → `main`
 
-_TBD — filled in commit #5._
+Ordered by blast radius × likelihood.
+
+### P-1 — Ship `screen-capture.ts` with allowlist + ring-buffer + kill-switch
+
+**Blocker. Cannot merge without.** New file at `src/perception/screen-capture.ts`
+exporting `ScreenCapturer`, `DEFAULT_PRIVATE_APPS`, `PrivateAppSkippedError`,
+and the `ScreenFrame` type. Required invariants:
+
+- Constructor takes `{ intervalSec, ringBufferSize, storageDir, privateAppAllowlist, bridge, scheduler }` — all optional, all injectable for tests.
+- `start()` / `stop()` idempotent; `captureNow()` works without `start()`.
+- `DEFAULT_PRIVATE_APPS` frozen, includes minimum bundle IDs:
+  `com.agilebits.onepassword7`, `com.1password.1password`,
+  `com.apple.keychainaccess`, `com.bitwarden.desktop`, `com.apple.DiskUtility`,
+  `com.apple.systempreferences`, plus a banking bundle-ID set (Chase, BoA, Wells, Citi).
+- `isPrivateBundle()` checked *before* the PNG is accepted — evicted PNG must be `unlink`ed if the Swift helper already wrote it.
+- `forceOff()` stops loop, purges memory + disk, latches the instance.
+- `purge(olderThanSec?)` both for scheduled GC and session-end.
+- Full test file `tests/screen-capture.test.ts` mirroring the 12-case shape observed in the orphaned leftover (start/stop idempotent, ring-buffer eviction unlinks PNGs, allowlist skips, kill-switch wipes disk, custom allowlist override, `purge(60)` honors age, `getRecent(n)` orders most-recent-first).
+
+Target LOC: ~300 impl + ~350 tests. Reviewer: Tester 2.
+
+### P-2 — Ship `vision-brief.ts` with network-free default + private-app LLM block
+
+**Blocker.** New file at `src/perception/vision-brief.ts` exporting
+`buildBrief(frame, deps?, opts?)`, `PRIVATE_APPS`, `isPrivateApp()`,
+`classifySentimentHeuristic()`. Required invariants:
+
+- `mode: "local-only"` **must not** call `fetch` — test with sentinel spy + CI grep.
+- `mode: "llm"` uses `AbortController` with 8 s default timeout; failures map to a fixed label set (`timeout | rate-limited | server-error | client-error | parse-error | schema-mismatch | network | privacy-block | unknown`). Never leak raw error messages (rationale: don't log API keys / URLs to the returned summary).
+- Private-app frames **short-circuit before the LLM call**, regardless of mode. Separate test asserts `fetchImpl` not called when `active_app` is in `PRIVATE_APPS`.
+- `LlmBriefSchema` validated via zod before the response is trusted.
+- Falls back to local-only brief on any LLM path failure — caller never sees a thrown error.
+
+Target LOC: ~400 impl + ~300 tests.
+
+### P-3 — Ship `yabai-bridge.ts` + AppleScript fallback + `driver-factory.ts`
+
+**Blocker for Phase 11.** Three new files:
+
+- `src/window-manager/yabai-bridge.ts` — `createYabaiDriver(exec?)` returning `WMDriver`. All `execFile("yabai", args, { shell: false, timeout: 5000, maxBuffer: 1 * 1024 * 1024 })`. Never template a shell string.
+- `src/window-manager/applescript-bridge.ts` — fallback driver when `yabai` unavailable. Must use `execFile("osascript", ["-e", template])` with a parameterized template or with the same `escapeAppleScript()` helper as `src/social/drivers/imessage-driver.ts`.
+- `src/window-manager/driver-factory.ts` — `createWMDriver(): Promise<WMDriver>` that probes yabai first (via `isAvailable()`) and falls back to AppleScript. Must throw `WMUnavailableError` (not silently return a no-op) when both paths fail.
+
+Target LOC: ~250 + ~200 + ~80 + tests.
+
+### P-4 — Wire audit log + kill-switch hotkey
+
+**Blocker for §7.** Three small changes:
+
+- `src/perception/screen-capture.ts` and `src/perception/vision-brief.ts` accept an optional `auditLog?: AuditLog` dep; every `capture()`, `ocr()`, and `buildBrief({ mode: "llm" })` invocation appends: `{ kind, ts, bundle_id, active_app, bytes?, duration_ms, success }`. No PNG bytes, no OCR text, no LLM output.
+- `src/controller/cortex.ts` wires the existing `AuditLog` instance into the capturer + brief builder at boot.
+- `src/ui/hotkey.ts` registers `cmd+shift+escape` → `capturer.forceOff()`. Persist the latched state to `~/.cortexos/session.json` so the kill-switch survives process restarts.
+
+Target LOC: ~80 deltas across three files + tests.
+
+### P-5 — Register `nchinda_see` + `wm_*` MCP tools + integration DoD test
+
+**Blocker for §4.1.5 + §4.2.5.**
+
+- Extend `src/mcp/tool-schema.ts` with `nchinda_see`, `wm_move_window`, `wm_tile`, `wm_focus`, `wm_space_switch` — zod-validated inputs matching the existing `nchinda_*` / `social_*` tool patterns.
+- Extend `src/mcp/nchinda-tools.ts` (or new `src/mcp/perception-tools.ts`) with the handler that calls `capturer.captureNow()` → `buildBrief()` → returns.
+- Extend `src/mcp/wm-tools.ts` (new) with handlers that call the `WMDriver`.
+- Register both in `scripts/mcp/serve-nchinda.mjs`.
+- Add `tests/phase8-11-dod.test.ts` with the DoD bullets from VISION §4:
+  - allowlist bundle IDs set non-empty
+  - local-only brief has no network egress (fetch spy)
+  - capturer.forceOff() purges storage dir
+  - yabai driver `isAvailable()` handles missing binary
+  - computeLayout matches driver-reported frames within ±1 px
+  - `nchinda_see()` + `wm_tile({layout:"grid-2x2"})` survive round-trip
+
+Target LOC: ~200 + ~300 tests.
 
 ## 9. Follow-ups for later phases
 
-_TBD — filled in commit #5._
+1. **Phase 8.5 (UI) — Waveform eye/camera indicators (§7.6)** — when screen-watching active, the waveform dot pulses; when webcam capturing, a red camera dot overlays. Scope: `src/ui/*`. Non-blocking for Phase 8 DoD but required for §7.6 sign-off.
+2. **Phase 8.6 — Property-based tests for `computeLayout`** — replace the 17 example tests with `fast-check` properties (viewport coverage, no overlap, slot count == n). Non-blocking.
+3. **Phase 8.7 — Helper path hardening** — `native-bridge.ts` should reject `imagePath` / `outPath` containing `..` or not under `$HOME` / `$TMPDIR`. Low-exploit-probability risk but trivial to close.
+4. **Phase 9 dependency** — before Phase 9 (camera) starts, Phase 8's §7 allowlist + audit log + kill-switch MUST be green, because Phase 9 extends the same primitives to the webcam (higher-stakes capture surface).
+5. **Phase 10 computer-use dependency** — the `AuditLog.append("perception.actuator.*")` kind must be reserved now so Phase 10's actuator events can share the same log without a migration.
+6. **Documentation** — `CLAUDE.md` "privacy rules" section should enumerate the §7 invariants as hard gates; today's file documents file-location rules but not privacy posture.
+7. **Orphaned test leftover cleanup** — either commit `tests/screen-capture.test.ts` and `tests/yabai-bridge.test.ts` alongside their implementations (as part of P-1 / P-3) or delete them; do not leave untracked.
+8. **Integration-branch hygiene** — `phase8-11/integration` currently holds only `INTEGRATION_NOTES.md`. After P-1…P-5 land, the first real merge must re-run `npm test` and record the pass count (expected: `921 + 17 (C3) + ~30 (C1 P-1) + ~30 (C2 P-2) + ~40 (C3 P-3) + ~20 (P-4 + P-5) ≈ 1060` tests) in `INTEGRATION_NOTES.md`.
 
 ---
 
