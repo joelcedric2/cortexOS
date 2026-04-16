@@ -28,6 +28,7 @@ import {
   captureSlotPane,
 } from "./pane-helpers.js";
 import { resolvePlanRole } from "./plan-role-resolver.js";
+import type { PaneOrnamentManager } from "../window-manager/pane-ornaments.js";
 
 const DEFAULT_DONE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_DESIGNER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -53,6 +54,14 @@ export interface OrchestratorDeps {
   briefStore?: BriefStore;
   runResearch?: typeof runResearch;
   worktreeManager?: WorktreeManager;
+  /**
+   * Optional pane-ornament manager (Phase 11). When provided, the orchestrator
+   * fires `syncWithAgents(registry.list())` after each spawn and again after
+   * terminal transitions so the coloured borders track live agent state. When
+   * omitted, every orchestrator call path is a no-op w.r.t. ornaments
+   * (back-compat — all pre-Phase-11 tests still pass).
+   */
+  ornamentManager?: Pick<PaneOrnamentManager, "syncWithAgents" | "clear">;
 }
 
 interface SpawnedExecutor {
@@ -88,6 +97,10 @@ export class Orchestrator {
   private readonly briefStore?: BriefStore;
   private readonly runResearchFn: typeof runResearch;
   private readonly worktreeManager?: WorktreeManager;
+  private readonly ornamentManager?: Pick<
+    PaneOrnamentManager,
+    "syncWithAgents" | "clear"
+  >;
 
   constructor(
     private readonly controller: CortexController,
@@ -105,6 +118,22 @@ export class Orchestrator {
     this.briefStore = deps.briefStore;
     this.runResearchFn = deps.runResearch ?? runResearch;
     this.worktreeManager = deps.worktreeManager;
+    this.ornamentManager = deps.ornamentManager;
+  }
+
+  /**
+   * Fire-and-forget ornament sync after a registry transition. Never awaited
+   * by caller paths so a slow WM driver can't stall the orchestrator.
+   */
+  private syncOrnaments(): void {
+    if (!this.ornamentManager) return;
+    const snapshot = this.registry.list();
+    void Promise.resolve(this.ornamentManager.syncWithAgents(snapshot)).catch(
+      (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] pane-ornament sync failed: ${msg}`);
+      },
+    );
   }
 
   /** Primary entry point — drive the end-to-end Phase 1 flow for `task`. */
@@ -198,6 +227,9 @@ export class Orchestrator {
       return { success: false, taskId, error: "plan produced no executable agents" };
     }
 
+    // Phase 11: paint per-agent accent borders (no-op if ornamentManager absent).
+    this.syncOrnaments();
+
     let anyFailed = false;
     const failures: string[] = [];
 
@@ -242,6 +274,10 @@ export class Orchestrator {
         }
       }),
     );
+
+    // Phase 11: after every executor reaches a terminal status, re-sync so
+    // ornaments for finished agents get cleared from their pane windows.
+    this.syncOrnaments();
 
     if (anyFailed) {
       return { success: false, taskId, error: failures.join("; ") };

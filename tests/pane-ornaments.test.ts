@@ -295,4 +295,34 @@ describe("PaneOrnamentManager.syncWithAgents", () => {
     assert.equal(mgr.list().length, 0);
     assert.ok(errs.some((e) => /listWindows failed/.test(e)));
   });
+
+  test("clears ornaments for agents whose status is not running/spawning", async () => {
+    const exec = new FakeExec();
+    const driver = new FakeDriver();
+    driver.windows = [
+      { id: 100, app: "Terminal", title: "agent-coder-1", space: 1 },
+      { id: 200, app: "Terminal", title: "agent-tester-1", space: 1 },
+    ];
+    const mgr = new PaneOrnamentManager({
+      driver,
+      execFileImpl: exec.impl,
+      bordersAvailable: true,
+    });
+
+    // First pass: both running → both get painted.
+    await mgr.syncWithAgents([
+      { id: "coder-1", role: "coder", tmux_session: "agent-coder-1", status: "running" },
+      { id: "tester-1", role: "tester", tmux_session: "agent-tester-1", status: "running" },
+    ]);
+    assert.equal(mgr.list().length, 2);
+
+    // Second pass: coder finishes → ornament 100 is cleared, 200 survives.
+    await mgr.syncWithAgents([
+      { id: "coder-1", role: "coder", tmux_session: "agent-coder-1", status: "done" },
+      { id: "tester-1", role: "tester", tmux_session: "agent-tester-1", status: "running" },
+    ]);
+    const remaining = mgr.list();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].windowId, 200);
+  });
 });
