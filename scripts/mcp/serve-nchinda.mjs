@@ -114,6 +114,16 @@ async function dispatch(name, args, tools) {
     case "nchinda_status":     return tools.coordination.status(args);
     case "nchinda_escalate":   return tools.coordination.escalate(args);
     case "nchinda_ask_peer":   return await tools.coordination.askPeer(args);
+    case "nchinda_see": {
+      const { nchindaSee } = await import("../../dist/mcp/nchinda-see.js");
+      const { buildBrief } = await import("../../dist/perception/vision-brief.js");
+      const { ScreenCapturer } = await import("../../dist/perception/screen-capture.js");
+      // Runtime-shared capturer (wired by Orchestrator). Fallback: a fresh
+      // instance that won't have called `.start()` yet — captureNow() still
+      // works independently of the loop.
+      const capturer = runtime.screenCapturer ?? new ScreenCapturer();
+      return await nchindaSee(args ?? {}, { capturer, brief: buildBrief });
+    }
     case "web_search": {
       const { webSearch } = await import("../../dist/tools/web-search.js");
       return await webSearch(args?.query ?? "", {

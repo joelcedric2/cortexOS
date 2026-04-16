@@ -582,6 +582,24 @@ export const SOCIAL_POST_SCHEMA: McpToolSchema = {
   },
 };
 
+export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
+  name: "nchinda_see",
+  description:
+    "Capture one fresh screenshot via the macOS ScreenCaptureKit helper and return a compact VisionBrief (active_app, window_title, summary, visible_text, sentiment). Default `mode` is `local-only` (no network call). Pass `mode: \"llm\"` to opt in to a Claude Haiku vision polish step — falls back to local-only on any failure. Frames from private apps (1Password, Keychain, banking, …) are captured but never leave the device regardless of mode.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        enum: ["local-only", "llm"],
+        description:
+          "local-only (default) = OCR + heuristic summary, zero network. llm = adds one Claude Haiku vision call with graceful fallback to local-only.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -593,6 +611,7 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_STATUS_SCHEMA,
   NCHINDA_ESCALATE_SCHEMA,
   NCHINDA_ASK_PEER_SCHEMA,
+  NCHINDA_SEE_SCHEMA,
   WEB_SEARCH_SCHEMA,
   TOOL_DISCOVERY_SCHEMA,
   SKILL_DISCOVER_SCHEMA,
