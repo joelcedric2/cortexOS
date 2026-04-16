@@ -30,7 +30,8 @@ export type AuditAction =
   | "capture"
   | "ocr"
   | "vision_llm"
-  | "voice_intent";
+  | "voice_intent"
+  | "cu_action";
 
 export interface AuditEntry {
   /** Action type — see {@link AuditAction}. */
