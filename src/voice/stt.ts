@@ -59,12 +59,23 @@ export class SpeechToText {
   private partialTimer: ReturnType<typeof setInterval> | null = null;
   private recordingStartedAt = 0;
 
+  // Test hook: when set, startRecording/stopRecording skip sox/whisper and
+  // resolve stopRecording with this transcript instead.
+  private _testTranscript: string | null = null;
+
   constructor(opts: STTOptions) {
     this.model = opts.model ?? 'base.en';
     this.language = opts.language ?? 'en';
     this.onPartial = opts.onPartial;
     this.onFinal = opts.onFinal;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
+  }
+
+  /** Test hook: resolve the next stopRecording() with `transcript` synchronously. */
+  _resolveWith(transcript: string): void {
+    this._testTranscript = transcript;
+    this.recording = false;
+    this.onFinal?.(transcript);
   }
 
   async startRecording(): Promise<void> {
@@ -117,6 +128,14 @@ export class SpeechToText {
   }
 
   async stopRecording(): Promise<string> {
+    // Test hook: if _resolveWith was called, short-circuit with the transcript.
+    if (this._testTranscript !== null) {
+      const t = this._testTranscript;
+      this._testTranscript = null;
+      this.recording = false;
+      return t;
+    }
+
     if (!this.recording) {
       return '';
     }

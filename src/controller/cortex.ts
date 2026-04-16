@@ -34,7 +34,9 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AudioState } from "../voice/audio-state.js";
 import { AudioStateMachine } from "../voice/audio-state.js";
-import { WakeWordDetector, SpeechToText, TextToSpeech } from "../voice/_a-stub.js";
+import { WakeWordDetector } from "../voice/wake-word.js";
+import { SpeechToText } from "../voice/stt.js";
+import { TextToSpeech } from "../voice/tts.js";
 import { VoiceWSBridge } from "../voice/ws-bridge.js";
 import { VoiceOrchestrator } from "../voice/voice-orchestrator.js";
 
@@ -168,9 +170,11 @@ export class CortexController {
     if (process.env.CORTEXOS_VOICE === "on") {
       try {
         this.voiceStateMachine = new AudioStateMachine();
-        this.wakeWordDetector = new WakeWordDetector();
-        const stt = new SpeechToText();
-        const tts = new TextToSpeech();
+        // Wake-word + STT + TTS constructed lazily here; callbacks wired by the
+        // VoiceOrchestrator once it owns them (it installs its own onWake etc.).
+        this.wakeWordDetector = new WakeWordDetector({ onWake: () => {} });
+        const stt = new SpeechToText({});
+        const tts = new TextToSpeech({});
 
         this.voiceWSBridge = new VoiceWSBridge({
           stateMachine: this.voiceStateMachine,

@@ -108,9 +108,29 @@ export class TextToSpeech {
   private readonly opts: TTSOptions;
   private speaking = false;
   private abortController: AbortController | null = null;
+  // Test hook: when set, speak() awaits this promise instead of shelling
+  // out to say/piper/elevenlabs. _resolveSpeak() settles it.
+  private _testPromise: { promise: Promise<void>; resolve: () => void } | null = null;
 
   constructor(opts: TTSOptions) {
     this.opts = opts;
+  }
+
+  /** Test hook: prime the next speak() to await an in-process promise. */
+  _armTestPromise(): void {
+    let resolve: () => void = () => {};
+    const promise = new Promise<void>((r) => { resolve = r; });
+    this._testPromise = { promise, resolve };
+  }
+
+  /** Test hook: resolve the pending speak() call. */
+  _resolveSpeak(): void {
+    if (!this._testPromise) {
+      // If not armed, arm then immediately resolve so the next speak() is instant.
+      this._armTestPromise();
+    }
+    this._testPromise?.resolve();
+    this._testPromise = null;
   }
 
   async speak(text: string): Promise<void> {
@@ -124,18 +144,23 @@ export class TextToSpeech {
     this.opts.onSpeakStart?.();
 
     try {
-      const engine = await detectEngine(this.opts);
+      // Test path: if _armTestPromise was called, await its resolution instead.
+      if (this._testPromise) {
+        await this._testPromise.promise;
+      } else {
+        const engine = await detectEngine(this.opts);
 
-      switch (engine) {
-        case 'macos-say':
-          await this.speakMacos(text);
-          break;
-        case 'piper':
-          await this.speakPiper(text);
-          break;
-        case 'elevenlabs':
-          await this.speakElevenLabs(text);
-          break;
+        switch (engine) {
+          case 'macos-say':
+            await this.speakMacos(text);
+            break;
+          case 'piper':
+            await this.speakPiper(text);
+            break;
+          case 'elevenlabs':
+            await this.speakElevenLabs(text);
+            break;
+        }
       }
     } finally {
       this.speaking = false;

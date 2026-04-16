@@ -10,9 +10,9 @@
  */
 
 import type { AudioStateMachine } from "./audio-state.js";
-import type { WakeWordDetector } from "./_a-stub.js";
-import type { SpeechToText } from "./_a-stub.js";
-import type { TextToSpeech } from "./_a-stub.js";
+import type { WakeWordDetector } from "./wake-word.js";
+import type { SpeechToText } from "./stt.js";
+import type { TextToSpeech } from "./tts.js";
 import type { GlobalHotkey } from "./hotkey.js";
 import type { EventBus } from "../ipc/event-bus.js";
 
@@ -66,8 +66,8 @@ export class VoiceOrchestrator {
     this.running = true;
 
     // Wire wake-word trigger.
-    this.wakeWord.onWake(() => this.handleWake());
-    this.wakeWord.start();
+    this.wakeWord.setOnWake(() => this.handleWake());
+    await this.wakeWord.start();
 
     // Wire hotkey trigger if provided.
     if (this.hotkey) {

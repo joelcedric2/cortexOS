@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { PendingSurface } from "../src/proactivity/pending-surface.js";
-import { ObservationStore } from "../src/sensors/_a-stub.js";
+import { ObservationStore } from "../src/sensors/observation-store.js";
 import type { SensorSample } from "../src/sensors/sensor.js";
 import type { EventBus, AgentEvent } from "../src/ipc/event-bus.js";
 
@@ -40,7 +40,7 @@ describe("PendingSurface", () => {
   let surface: PendingSurface;
 
   beforeEach(() => {
-    store = new ObservationStore();
+    store = new ObservationStore({ dbPath: ":memory:" });
     surface = new PendingSurface(store);
   });
 

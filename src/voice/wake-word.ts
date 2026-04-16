@@ -47,10 +47,10 @@ export function computeRms(pcm: Buffer): number {
 }
 
 export class WakeWordDetector {
-  private readonly keyword: string;
+  readonly keyword: string;
   private readonly sensitivity: number;
   private readonly sampleRate: number;
-  private readonly onWake: () => void;
+  private onWake: () => void;
   private readonly onRmsUpdate?: (rms: number) => void;
   private readonly threshold: number;
 
@@ -66,6 +66,23 @@ export class WakeWordDetector {
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
     this.threshold = sensitivityToThreshold(this.sensitivity);
+  }
+
+  /**
+   * Replace the wake callback after construction. Used by VoiceOrchestrator,
+   * which holds the detector but wires the handler later when it knows what
+   * to do with a wake event.
+   */
+  setOnWake(fn: () => void): void {
+    this.onWake = fn;
+  }
+
+  /**
+   * Test hook: synchronously fire the wake callback without running sox.
+   * Use only from tests.
+   */
+  _simulateWake(): void {
+    this.onWake();
   }
 
   async start(): Promise<void> {

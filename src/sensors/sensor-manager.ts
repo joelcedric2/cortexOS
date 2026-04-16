@@ -6,7 +6,7 @@
  * on the EventBus. Sensor failures are logged but never propagate.
  */
 import type { EventBus } from "../ipc/event-bus.js";
-import type { Sensor, SensorSample } from "./sensor.js";
+import type { Sensor } from "./sensor.js";
 import type { ObservationStore } from "./observation-store.js";
 
 // ─── Options ─────────────────────────────────────────────────────────────────
