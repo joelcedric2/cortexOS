@@ -173,6 +173,75 @@ async function dispatch(name, args, tools) {
       if (name === "wm_space_switch") return await wm.spaceSwitch(args);
       return await wm.listWindows(args);
     }
+    // ─── Phase 12 content-app tools (safari/notes/reminders/music/finder) ───
+    case "safari_open_tab":
+    case "safari_read_current_tab":
+    case "safari_list_tabs":
+    case "safari_close_tab":
+    case "safari_list_bookmarks":
+    case "safari_search_history":
+    case "notes_append":
+    case "notes_create":
+    case "notes_search":
+    case "notes_delete":
+    case "reminders_add":
+    case "reminders_complete":
+    case "reminders_list":
+    case "reminders_remove":
+    case "music_play":
+    case "music_pause":
+    case "music_skip":
+    case "music_queue":
+    case "music_set_volume":
+    case "music_currently_playing":
+    case "finder_reveal":
+    case "finder_move":
+    case "finder_rename":
+    case "finder_tag":
+    case "finder_list_tags":
+    case "finder_trash": {
+      const { AppToolsContent } = await import(
+        "../../dist/mcp/app-tools-content.js"
+      );
+      const apps =
+        runtime.appToolsContent ??
+        new AppToolsContent({
+          safari: runtime.safariDriver,
+          notes: runtime.notesDriver,
+          reminders: runtime.remindersDriver,
+          music: runtime.musicDriver,
+          finder: runtime.finderDriver,
+        });
+      switch (name) {
+        case "safari_open_tab":          return await apps.safariOpenTab(args);
+        case "safari_read_current_tab":  return await apps.safariReadCurrentTab(args);
+        case "safari_list_tabs":         return await apps.safariListTabs(args);
+        case "safari_close_tab":         return await apps.safariCloseTab(args);
+        case "safari_list_bookmarks":    return await apps.safariListBookmarks(args);
+        case "safari_search_history":    return await apps.safariSearchHistory(args);
+        case "notes_append":             return await apps.notesAppend(args);
+        case "notes_create":             return await apps.notesCreate(args);
+        case "notes_search":             return await apps.notesSearch(args);
+        case "notes_delete":             return await apps.notesDelete(args);
+        case "reminders_add":            return await apps.remindersAdd(args);
+        case "reminders_complete":       return await apps.remindersComplete(args);
+        case "reminders_list":           return await apps.remindersList(args);
+        case "reminders_remove":         return await apps.remindersRemove(args);
+        case "music_play":               return await apps.musicPlay(args);
+        case "music_pause":              return await apps.musicPause(args);
+        case "music_skip":               return await apps.musicSkip(args);
+        case "music_queue":              return await apps.musicQueue(args);
+        case "music_set_volume":         return await apps.musicSetVolume(args);
+        case "music_currently_playing":  return await apps.musicCurrentlyPlaying(args);
+        case "finder_reveal":            return await apps.finderReveal(args);
+        case "finder_move":              return await apps.finderMove(args);
+        case "finder_rename":            return await apps.finderRename(args);
+        case "finder_tag":               return await apps.finderTag(args);
+        case "finder_list_tags":         return await apps.finderListTags(args);
+        case "finder_trash":             return await apps.finderTrash(args);
+      }
+      break;
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;
