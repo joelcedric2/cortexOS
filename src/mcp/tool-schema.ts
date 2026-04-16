@@ -681,6 +681,48 @@ export const NCHINDA_SEE_SCHEMA: McpToolSchema = {
   },
 };
 
+// ────────────────────────── Rewind (Phase 15) ─────────────────────────────
+
+export const NCHINDA_REWIND_SCHEMA: McpToolSchema = {
+  name: "nchinda_rewind",
+  description:
+    "Retroactive Rewind-style query over Nchinda's screen ring buffer. Given a natural-language `text`, returns up to `limit` past screen memories ranked by semantic similarity. Optional `timeRange` (ISO-8601 or Date) narrows to a window; optional `app` narrows to a specific active application. Results include id/captured_at/label/active_app/window_title/similarity/ocr_excerpt/webp_path. Webp path is null when retention has downgraded the row.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: {
+        type: "string",
+        description: "Natural-language query (e.g. 'the article I was reading').",
+        minLength: 1,
+      },
+      timeRange: {
+        type: "object",
+        description:
+          "Optional time window. Both endpoints accept ISO-8601 strings or Date-compatible values.",
+        properties: {
+          from: { type: "string", description: "ISO-8601 lower bound." },
+          to: { type: "string", description: "ISO-8601 upper bound." },
+        },
+        required: ["from", "to"],
+        additionalProperties: false,
+      },
+      app: {
+        type: "string",
+        description: "Case-insensitive exact-match filter on active_app.",
+        minLength: 1,
+      },
+      limit: {
+        type: "integer",
+        description: "Desired result count (1..50). Default 5.",
+        minimum: 1,
+        maximum: 50,
+      },
+    },
+    required: ["text"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -693,6 +735,7 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_ESCALATE_SCHEMA,
   NCHINDA_ASK_PEER_SCHEMA,
   NCHINDA_SEE_SCHEMA,
+  NCHINDA_REWIND_SCHEMA,
   WEB_SEARCH_SCHEMA,
   TOOL_DISCOVERY_SCHEMA,
   SKILL_DISCOVER_SCHEMA,
