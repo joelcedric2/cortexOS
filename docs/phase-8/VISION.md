@@ -92,14 +92,65 @@ Each repo listed with star count (Apr 2026) + what we take.
 ## 4. New Phases (additions to the master plan)
 
 ### Phase 8 — Screen perception (the eyes)
-**Goal**: Nchinda can see your screen and tell you what you're doing, continuously.
+**Goal**: Nchinda can see your screen when it needs to — never continuously, never in the background — and compress what it sees into durable semantic memory.
 
-1. **`src/perception/screen-capture.ts`** — ScreenCaptureKit loop at 1–2 fps (user-tunable), with active-window detection via `sindresorhus/active-win`-style helper. Frames persist locally (ring buffer, not uploaded) for retroactive queries. Opt-in, explicit consent per Phase 0.
+**Two capture modes, both explicitly scoped — never always-on**:
+- **On-demand**: you ask ("what's on my screen?"); Nchinda captures 1–N frames, answers, stops.
+- **Active-task**: you give Nchinda a task that needs screen context ("finish this email"); the capturer starts at 2 fps for the duration of that task, stops the instant the task completes or you say "stop".
+
+**Target usage envelope** (not a hard cap — Nchinda can override via policy): ~30–60 min of active-task capture per day at 2 fps, with aggressive perceptual-hash dedup (typical survival rate 10–30% of captured frames on text-heavy screens).
+
+1. **`src/perception/screen-capture.ts`** — ScreenCaptureKit capturer with two modes. Parameters are **policy-driven, not hardcoded**: the AutonomyLoop's Policy engine chooses capture rate, mode, and dedup threshold per task. Defaults: 2 fps in active-task mode, auto-scale down if dedup rate > 80%. Active-window detection via Swift helper. Frames persist locally only.
 2. **`src/perception/ocr.ts`** — local OCR (Apple Vision `VNRecognizeTextRequest` via a small Swift helper binary). No cloud round-trip for text extraction.
-3. **`src/perception/vision-brief.ts`** — wraps a screenshot → compact structured brief: `{activeApp, windowTitle, visibleText, uiElements[], sentiment?: "focused"|"idle"|"confused"}`. Uses Claude Sonnet for vision call when the user asks "what am I doing?", else cheaper local path.
-4. **`screen_context` sensor** (Phase 5.5 placeholder) — ship for real. Fires an observation when active-app changes, when the user has been idle on the same screen > 5 min (possible stuck signal), or when a text-field draft sits > 5 min unsent (links to existing `unsent-drafts` sensor).
-5. **`nchinda_see()` MCP tool** — any agent can ask for the current screen brief.
-6. **Tests**: mock ScreenCaptureKit with fixture PNGs, assert brief shape; OCR fallback when Vision unavailable; sensor debounce.
+3. **`src/perception/vision-brief.ts`** — wraps a screenshot → compact structured brief: `{activeApp, windowTitle, visibleText, uiElements[], sentiment?: "focused"|"idle"|"confused"|"consuming"|"composing", label: string}`. `label` is a 1-sentence semantic caption generated at capture time so later searches can match without decompressing the frame. Local-only mode uses heuristics; `llm` mode adds one Haiku vision call.
+4. **`screen_context` sensor** (Phase 5.5 placeholder) — ship for real. Fires an observation when active-app changes, when the user has been idle on the same screen > 5 min (possible stuck signal), or when a text-field draft sits > 5 min unsent (links to existing `unsent-drafts` sensor). The sensor **does not drive capture** — it only observes metadata (active-app, window title) which is free.
+5. **`nchinda_see()` MCP tool** — any agent can ask for the current screen brief. Under active-task mode, this is served from the rolling buffer; under on-demand it triggers a fresh capture.
+6. **Kill-switch (two paths, both wired)**:
+   - Global hotkey **⌘⇧Esc** — stops any in-flight capture, purges the rolling buffer, logs the event to the audit ndjson.
+   - Spoken word **"Stop"** — routed through the existing VoiceOrchestrator intent extractor; same effect as the hotkey.
+7. **Audit log** — every capture, OCR call, vision LLM call, and kill-switch event appended to `~/.cortexos/audit.ndjson` (reuses Phase 5.5 `AuditLog`).
+8. **Tests**: mock ScreenCaptureKit with fixture PNGs, assert brief shape; OCR fallback when Vision unavailable; sensor debounce; kill-switch paths.
+
+### Phase 8.5 — Retention pipeline + adaptive capture + audit (storage bounded on consumer hardware)
+**Goal**: Nchinda's screen memory stays useful forever on a 250 GB disk + 8 GB RAM box. No cloud, no surveillance, no surprise disk bloat.
+
+**The storage contract**:
+- Every captured frame becomes, at capture time: `{webp_path, embedding_int8 (512-d CLIP), ocr_text_zstd, label_caption, phash64, active_app, window_title, ts}` — stored together as one SQLite row per frame + one WebP on disk.
+- WebPs live **7 days**, then the nightly consolidation worker (Phase 7 — already shipped) drops the WebP file and keeps the rest of the row forever. Query by embedding / label / OCR text still works; you just can't show back the pixels.
+- Typical footprint at 30–60 min/day of active capture: **3–13 GB sustained total** (WebP rolling window + year of embeddings).
+
+**1. `src/perception/webp-encoder.ts`** — WebP q=75 encode at capture time via the Swift helper (libwebp is built into macOS). Thumbnail-first strategy: encode at 1280px max width, ~50–150 KB typical for text screens.
+
+**2. `src/perception/phash.ts`** — 64-bit perceptual hash (8 bytes) computed at capture. Dedup rule: if current frame's phash is within Hamming distance 4 of the previous frame's AND OCR text similarity > 98%, skip. Exposed as a function so the capturer's **adaptive rate-control** can query recent dedup stats to auto-scale frame rate (drop to 0.5 fps when dedup > 80%, back to 2 fps when it drops below 40%).
+
+**3. `src/perception/retention.ts`** — the 7-day downgrader. Runs via the existing nightly consolidation worker. For each frame row older than 7 days: delete `webp_path`, clear the file-path column, leave everything else. Idempotent (re-running is a no-op). Logs bytes reclaimed.
+
+**4. Daily disk-budget check** — in `screen-capture.ts`, before writing a frame, query the running 24-hour total of WebP bytes. If above `captureBudgetDailyBytes` (default 400 MB; policy-tunable per §7.1), refuse the write + emit an `error` event + surface a Pending Surface item suggesting "Nchinda hit its capture budget — clear old frames or raise the limit?" Nchinda **asks the user**, never silently drops data or exceeds the budget.
+
+**5. `screen_memories` table** in `~/.cortexos/registry.db`:
+```sql
+CREATE TABLE screen_memories (
+  id TEXT PRIMARY KEY,
+  captured_at TEXT NOT NULL,
+  webp_path TEXT,              -- nulled after 7-day retention
+  phash INTEGER NOT NULL,      -- 64-bit perceptual hash
+  active_app TEXT,
+  window_title TEXT,
+  ocr_text_zstd BLOB,          -- zstd-compressed OCR
+  label TEXT,                  -- 1-sentence semantic caption
+  embedding BLOB NOT NULL,     -- 512-dim int8 CLIP
+  task_id TEXT,                -- links capture to the task that triggered it
+  session_id TEXT,             -- groups frames of one active-task session
+  bytes INTEGER NOT NULL       -- for budget accounting
+);
+CREATE INDEX idx_sm_task ON screen_memories(task_id);
+CREATE INDEX idx_sm_captured ON screen_memories(captured_at);
+CREATE INDEX idx_sm_phash ON screen_memories(phash);
+```
+
+**6. Audit wiring** — every capture, OCR, vision-LLM call, and kill-switch event appended to `~/.cortexos/audit.ndjson` (existing Phase 5.5 `AuditLog`). Closes T2's REVIEW blocker P-1.
+
+**7. Tests** — retention round-trip (seed 10 rows, advance clock 8 days, run downgrader, assert WebPs gone + embeddings retained); budget-check refuses to write when over; adaptive rate-control scales correctly based on synthetic dedup stream; audit entries match capture events 1:1.
 
 ### Phase 9 — Camera perception
 **Goal**: "Nchinda, what am I looking at?" → it uses the webcam or Continuity Camera (iPhone) to capture and describe.
@@ -214,6 +265,12 @@ watch_draft(enable: boolean, app?: string)
 All follow the existing pattern: zod-validated inputs, native execFile (no shell), sandboxed where possible, escalation-on-irreversible.
 
 ---
+
+## 7.0 "Not hardcoded" — a design principle
+
+Every numeric threshold in this plan (capture rate, dedup threshold, retention days, daily byte budget, sensor intervals, etc.) is a **default value set by the Policy engine**, not a compile-time constant. Nchinda can change any of them at runtime when it has reason to: it sees the user is working in a different mode, disk is low, a task needs more frames, the user said "capture more". The agent should read the environment, consider memory, consult past briefs, and adjust — not follow rules blindly.
+
+Hardcoded constants in code are a smell. Policy-driven defaults with explainable overrides are the pattern.
 
 ## 7. Privacy posture (non-negotiable)
 
