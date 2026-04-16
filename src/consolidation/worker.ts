@@ -30,10 +30,22 @@ import {
   type CanonPromotionOptions,
   type CanonPromotionReport,
 } from "./canon.js";
+import type { ScreenMemoriesDB } from "../perception/screen-memories-db.js";
+import {
+  runRetention,
+  type RetentionOptions,
+  type RetentionReport,
+} from "../perception/retention.js";
 
 export interface ConsolidationRunReport {
   dedup: DedupReport;
   canon: CanonPromotionReport;
+  /**
+   * Phase 8.5 — screen-memories retention downgrader. Present only when
+   * `deps.screenMemoriesDB` is supplied (opt-in; existing callers keep
+   * the old shape unchanged).
+   */
+  retention?: RetentionReport;
   duration_ms: number;
   ts: string;
 }
@@ -46,11 +58,18 @@ export interface ConsolidationDeps {
   auditDir?: string;
   /** Clock override for deterministic tests. */
   now?: () => Date;
+  /**
+   * Phase 8.5 — when present, the worker runs the 7-day retention sweep
+   * after dedup + canon promotion.
+   */
+  screenMemoriesDB?: ScreenMemoriesDB;
 }
 
 export interface ConsolidationRunOptions {
   dedupOpts?: DedupOptions;
   canonOpts?: CanonPromotionOptions;
+  /** Phase 8.5 — override retentionDays / dryRun for the retention sweep. */
+  retentionOpts?: RetentionOptions;
   /** If true, skip persisting the report JSON. Tests opt-in. */
   skipPersist?: boolean;
 }
@@ -91,10 +110,27 @@ export async function runConsolidation(
     canonOpts,
   );
 
+  // Phase 8.5 — retention runs after dedup + canon so both passes operate
+  // on the full screen-memory set before frames are shed. Opt-in: only
+  // runs when the caller supplies a screenMemoriesDB.
+  let retention: RetentionReport | undefined;
+  if (deps.screenMemoriesDB) {
+    const retentionOpts: RetentionOptions = {
+      now: clock,
+      ...(opts.retentionOpts ?? {}),
+    };
+    retention = await runRetention(
+      { db: deps.screenMemoriesDB },
+      retentionOpts,
+    );
+    emit(deps.bus, "RETENTION_COMPLETE", clock(), { report: retention });
+  }
+
   const finishedAt = clock();
   const report: ConsolidationRunReport = {
     dedup,
     canon,
+    ...(retention ? { retention } : {}),
     duration_ms: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     ts: startIso,
   };
@@ -157,7 +193,8 @@ function emit(
   phase:
     | "CONSOLIDATION_STARTED"
     | "CONSOLIDATION_COMPLETE"
-    | "CONSOLIDATION_PERSIST_FAILED",
+    | "CONSOLIDATION_PERSIST_FAILED"
+    | "RETENTION_COMPLETE",
   ts: Date,
   payload: Record<string, unknown>,
 ): void {
