@@ -105,9 +105,11 @@ export class VoiceOrchestrator {
     | VoiceOrchestratorOptions["conversationIntent"]
     | undefined;
   private lastConvIntentTask: Promise<void> | undefined;
-  /** User name for personalized greetings. Reserved for Phase 6 UI. */
+  /** User name for personalized greetings. */
   readonly userName: string | undefined;
   private running = false;
+  /** Tracks whether we've greeted the user this session. */
+  private greeted = false;
 
   /**
    * Generation counter for flow cancellation. Each new wake increments
@@ -177,6 +179,25 @@ export class VoiceOrchestrator {
       payload: { phase: "VOICE_WAKE" },
       ts: new Date(),
     });
+
+    // First activation this session: greet the user before listening.
+    if (!this.greeted) {
+      this.greeted = true;
+      const name = this.userName ?? "Sir";
+      const greeting = `Welcome ${name}. Nchinda is online and ready. What can I do for you?`;
+      this.sm.transition("speaking");
+      this.tts.speak(greeting).then(() => {
+        if (this.isStale(this.generation)) return;
+        this.processVoiceInteraction(this.generation).catch((err) => {
+          console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);
+        });
+      }).catch(() => {
+        this.processVoiceInteraction(this.generation).catch((err) => {
+          console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);
+        });
+      });
+      return;
+    }
 
     this.processVoiceInteraction(this.generation).catch((err) => {
       console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);

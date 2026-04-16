@@ -14,7 +14,7 @@ export interface AudioStateEvent {
 }
 
 const VALID_TRANSITIONS: Record<AudioState, ReadonlyArray<AudioState>> = {
-  idle:      ['listening', 'error'],
+  idle:      ['listening', 'speaking', 'error'],
   listening: ['thinking', 'idle', 'error'],
   thinking:  ['speaking', 'idle', 'error'],
   speaking:  ['idle', 'listening', 'error'],

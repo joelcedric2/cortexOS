@@ -384,6 +384,23 @@ export function makeDefaultPersistCompact(opts: {
     const tags = ["compact", sessionId];
     if (taskId) tags.push(taskId);
 
+    // Generate a human-readable session label from the first chunk so
+    // sessions are findable by name ("debug-payment-flow-apr-16") instead
+    // of by UUID. Uses the first 500 chars as context for the slug.
+    let sessionLabel: string | undefined;
+    if (chunks.length > 0) {
+      const preview = chunks[0].slice(0, 500);
+      // Simple heuristic label: extract key nouns/verbs from first chunk
+      const words = preview
+        .replace(/[^a-zA-Z0-9\s-]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 3)
+        .slice(0, 5)
+        .map((w) => w.toLowerCase());
+      const datePart = new Date().toISOString().slice(0, 10);
+      sessionLabel = [...words, datePart].join("-");
+    }
+
     for (const chunk of chunks) {
       const embedding = await opts.embedder.embed(chunk);
       await opts.vectorStore.storeMemory({
@@ -392,7 +409,7 @@ export function makeDefaultPersistCompact(opts: {
         content: chunk,
         embedding,
         outcome: "success",
-        tags,
+        tags: sessionLabel ? [...tags, `session:${sessionLabel}`] : tags,
       });
     }
   };

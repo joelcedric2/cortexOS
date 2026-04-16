@@ -467,12 +467,30 @@ export class CortexController {
     const slotIndex = allocation.slotIndex;
     const sessionName = `slot${slotIndex}_${role}`;
 
+    // Recall past learnings from the learning loop
     const pastLearnings = await this.learningLoop.onTaskStart({
       role,
       taskDescription: `Starting ${role} agent`,
     });
     const learningsContext = this.learningLoop.formatLearningsForContext(pastLearnings);
-    const claudeMd = await buildAgentClaudeMd(role, learningsContext || undefined);
+
+    // Recall relevant memories from pgvector so the agent starts with context
+    // instead of amnesia. Top-5 memories matching the role + task description.
+    let recalledMemories: string | undefined;
+    try {
+      const query = `${role} agent task patterns`;
+      const embedding = await this.embedder.embed(query);
+      const memories = await this.vectorStore.searchMemories(embedding, 5, { agentRole: role });
+      if (memories.length > 0) {
+        recalledMemories = memories
+          .map((m, i) => `${i + 1}. [${m.outcome}] ${m.content.slice(0, 200)}`)
+          .join("\n");
+      }
+    } catch {
+      // Memory recall is best-effort — agent still spawns without it
+    }
+
+    const claudeMd = await buildAgentClaudeMd(role, learningsContext || undefined, recalledMemories);
 
     const agentWorkDir =
       workingDirectoryOverride ??

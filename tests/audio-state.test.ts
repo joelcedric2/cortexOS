@@ -26,12 +26,10 @@ describe('AudioStateMachine', () => {
     assert.equal(sm.getState(), 'idle');
   });
 
-  test('throws on invalid transition: idle -> speaking', () => {
+  test('allows idle -> speaking (greeting path)', () => {
     const sm = new AudioStateMachine();
-    assert.throws(
-      () => sm.transition('speaking'),
-      /Invalid audio state transition: idle -> speaking/,
-    );
+    sm.transition('speaking');
+    assert.equal(sm.getState(), 'speaking');
   });
 
   test('throws on invalid transition: listening -> speaking', () => {

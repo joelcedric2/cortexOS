@@ -1,0 +1,33 @@
+{
+  "": {
+    "swift-dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/master.swiftdeps"
+  },
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/CaptureCommand.swift": {
+    "dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.d",
+    "object": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swift.o",
+    "swiftmodule": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand~partial.swiftmodule",
+    "swift-dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.swiftdeps",
+    "diagnostics": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/CaptureCommand.dia"
+  },
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/OCRCommand.swift": {
+    "dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.d",
+    "object": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swift.o",
+    "swiftmodule": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand~partial.swiftmodule",
+    "swift-dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.swiftdeps",
+    "diagnostics": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/OCRCommand.dia"
+  },
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/VisionError.swift": {
+    "dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.d",
+    "object": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swift.o",
+    "swiftmodule": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError~partial.swiftmodule",
+    "swift-dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.swiftdeps",
+    "diagnostics": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/VisionError.dia"
+  },
+  "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/Sources/cortexos-vision/main.swift": {
+    "dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.d",
+    "object": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swift.o",
+    "swiftmodule": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.swiftdeps",
+    "diagnostics": "/Users/joelc/Documents/Github/cortexOS/scripts/native/cortexos-vision/.build/arm64-apple-macosx/debug/cortexos_vision.build/main.dia"
+  }
+}

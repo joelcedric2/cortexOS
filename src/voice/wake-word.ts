@@ -121,9 +121,10 @@ export class WakeWordDetector {
 
     let buffer = Buffer.alloc(0);
 
-    this.soxProcess.stdout?.on('data', (chunk: Buffer) => {
+    this.soxProcess.stdout?.on('data', (rawChunk: Buffer | string) => {
       if (!this.listening) return;
 
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
       buffer = Buffer.concat([buffer, chunk]);
 
       while (buffer.length >= bytesPerChunk) {

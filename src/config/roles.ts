@@ -100,16 +100,60 @@ export async function loadRoleConfig(role: AgentRole): Promise<string> {
 }
 
 /**
- * Write a temporary CLAUDE.md for an agent session, injecting
- * learnings from the vector store.
+ * Load SOUL.md from the repo root. Returns empty string if not found
+ * (agents still function without a soul — they just lack personality).
+ */
+let _soulCache: string | null = null;
+async function loadSoul(): Promise<string> {
+  if (_soulCache !== null) return _soulCache;
+  try {
+    // Walk up from config dir to repo root
+    const repoRoot = join(CONFIG_DIR, "..");
+    _soulCache = await readFile(join(repoRoot, "SOUL.md"), "utf-8");
+  } catch {
+    _soulCache = "";
+  }
+  return _soulCache;
+}
+
+/**
+ * Build the full CLAUDE.md for an agent session.
+ *
+ * Injection order (top → bottom of the agent's context):
+ *   1. SOUL.md — Nchinda's personality (every agent inherits the soul)
+ *   2. Role config — role-specific instructions
+ *   3. Recalled memories — top-k relevant past experiences from pgvector
+ *   4. Past learnings — success/fail exemplars from the learning loop
+ *
+ * This is the single function that turns a generic Claude CLI instance
+ * into a Nchinda specialist agent.
  */
 export async function buildAgentClaudeMd(
   role: AgentRole,
-  learnings?: string
+  learnings?: string,
+  recalledMemories?: string,
 ): Promise<string> {
-  const config = await loadRoleConfig(role);
-  if (learnings) {
-    return `${config}\n\n## Past Learnings\n\n${learnings}`;
+  const [soul, config] = await Promise.all([loadSoul(), loadRoleConfig(role)]);
+
+  const sections: string[] = [];
+
+  // Soul first — personality shapes everything downstream
+  if (soul) {
+    sections.push(soul);
   }
-  return config;
+
+  // Role-specific instructions
+  sections.push(config);
+
+  // Relevant memories from pgvector (injected by orchestrator before spawn)
+  if (recalledMemories) {
+    sections.push(`## Relevant Context from Memory\n\n${recalledMemories}`);
+  }
+
+  // Past learnings from the learning loop
+  if (learnings) {
+    sections.push(`## Past Learnings\n\n${learnings}`);
+  }
+
+  return sections.join("\n\n---\n\n");
 }
