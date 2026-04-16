@@ -25,7 +25,6 @@ import { mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { AuditLog } from "../proactivity/audit.js";
 import { defaultBinaryPath } from "./native-bridge.js";
 import {
   extractKeyframes,

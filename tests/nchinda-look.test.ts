@@ -89,7 +89,7 @@ describe("nchinda_look — happy path", () => {
       };
 
       const result = await nchindaLook(
-        { question: "what am I looking at", device: "continuity" },
+        { question: "what am I looking at", device: "continuity", mode: "still" },
         { capture, ocr, haikuFetch, apiKey: "test-key" },
       );
 
@@ -127,7 +127,7 @@ describe("nchinda_look — happy path", () => {
         );
 
       await nchindaLook(
-        { device: "back" },
+        { device: "back", mode: "still" },
         { capture, ocr, haikuFetch, apiKey: "k" },
       );
       assert.equal(sawDevice, "back");
@@ -154,7 +154,7 @@ describe("nchinda_look — LLM fallback", () => {
       delete process.env.ANTHROPIC_API_KEY;
       try {
         const result = await nchindaLook(
-          { question: "where am I flying" },
+          { question: "where am I flying", mode: "still" },
           { capture, ocr, haikuFetch },
         );
         assert.equal(fetchCalled, false, "no fetch when no api key");
@@ -176,7 +176,7 @@ describe("nchinda_look — LLM fallback", () => {
         new Response("boom", { status: 500 });
 
       const result = await nchindaLook(
-        { question: "hi" },
+        { question: "hi", mode: "still" },
         { capture, ocr, haikuFetch, apiKey: "key" },
       );
       assert.match(result.description, /Local-only reply/);
@@ -194,7 +194,7 @@ describe("nchinda_look — LLM fallback", () => {
       };
 
       const result = await nchindaLook(
-        {},
+        { mode: "still" },
         { capture, ocr, haikuFetch, apiKey: "key" },
       );
       assert.match(result.description, /Local-only reply/);
@@ -211,7 +211,7 @@ describe("nchinda_look — LLM fallback", () => {
     const haikuFetch: typeof fetch = async () => new Response("{}", { status: 200 });
 
     const result = await nchindaLook(
-      {},
+      { mode: "still" },
       { capture, ocr, haikuFetch, apiKey: "key" },
     );
     assert.match(result.description, /Local-only reply/);
@@ -272,11 +272,12 @@ describe("nchinda_look — MCP schema", () => {
     assert.ok(names.includes("nchinda_look"));
   });
 
-  it("exposes question + device as optional properties", () => {
+  it("exposes question + device + mode as optional properties", () => {
     assert.equal(NCHINDA_LOOK_SCHEMA.name, "nchinda_look");
     const props = NCHINDA_LOOK_SCHEMA.inputSchema.properties;
     assert.ok(props.question);
     assert.ok(props.device);
+    assert.ok(props.mode);
     assert.equal(NCHINDA_LOOK_SCHEMA.inputSchema.required, undefined);
   });
 });
