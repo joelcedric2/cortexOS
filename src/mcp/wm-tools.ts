@@ -20,10 +20,10 @@ import {
   selectDriver as defaultSelectDriver,
   WMUnavailableError,
   type WMDriver,
-  type WMTileLayout,
-  type WMWindow,
-  type WMSpace,
-} from "../window-manager/_c3-stub.js";
+  type Layout as WMTileLayout,
+  type Window as WMWindow,
+  type Space as WMSpace,
+} from "../window-manager/driver-factory.js";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -38,12 +38,13 @@ const MoveWindowSchema = z.object({
 });
 
 const TILE_LAYOUTS = [
-  "bsp",
-  "stack",
-  "float",
+  "full",
+  "vsplit",
+  "hsplit",
+  "columns-3",
+  "columns-4",
   "grid-2x2",
-  "grid-1x2",
-  "grid-2x1",
+  "grid-3x2",
 ] as const satisfies readonly WMTileLayout[];
 
 const TileSchema = z.object({
@@ -106,13 +107,15 @@ export class WmTools {
     if (!parsed.ok) return parsed.result;
     const { data } = parsed;
     return this.runWithDriver(async (driver) => {
+      const frame: { x?: number; y?: number; w?: number; h?: number } = {};
+      if (data.x !== undefined) frame.x = data.x;
+      if (data.y !== undefined) frame.y = data.y;
+      if (data.w !== undefined) frame.w = data.w;
+      if (data.h !== undefined) frame.h = data.h;
       await driver.moveWindow(data.windowId, {
         space: data.space,
         display: data.display,
-        x: data.x,
-        y: data.y,
-        w: data.w,
-        h: data.h,
+        ...(Object.keys(frame).length > 0 ? { frame } : {}),
       });
       return { ok: true as const, windowId: data.windowId };
     });

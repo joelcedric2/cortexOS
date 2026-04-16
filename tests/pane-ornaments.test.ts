@@ -19,10 +19,10 @@ import {
 } from "../src/window-manager/pane-ornaments.js";
 import type {
   WMDriver,
-  WMWindow,
-  WMSpace,
-  WMTileLayout,
-} from "../src/window-manager/_c3-stub.js";
+  Window as WMWindow,
+  Space as WMSpace,
+  Layout as WMTileLayout,
+} from "../src/window-manager/driver-factory.js";
 
 // ─── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -233,10 +233,11 @@ describe("PaneOrnamentManager.syncWithAgents", () => {
   test("matches windows by tmux session substring and paints the right colour", async () => {
     const exec = new FakeExec();
     const driver = new FakeDriver();
+    const baseFrame = { x: 0, y: 0, w: 800, h: 600 };
     driver.windows = [
-      { id: 100, app: "Terminal", title: "bash — cortex-coder-1 — 120x40", space: 1 },
-      { id: 200, app: "iTerm2", title: "cortex-researcher-1", space: 1 },
-      { id: 300, app: "Finder", title: "Downloads", space: 1 },
+      { id: 100, app: "Terminal", title: "bash — cortex-coder-1 — 120x40", space: 1, display: 1, frame: baseFrame, focused: false },
+      { id: 200, app: "iTerm2", title: "cortex-researcher-1", space: 1, display: 1, frame: baseFrame, focused: false },
+      { id: 300, app: "Finder", title: "Downloads", space: 1, display: 1, frame: baseFrame, focused: false },
     ];
     const mgr = new PaneOrnamentManager({
       driver,

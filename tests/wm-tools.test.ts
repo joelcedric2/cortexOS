@@ -13,10 +13,11 @@ import { WmTools } from "../src/mcp/wm-tools.js";
 import {
   WMUnavailableError,
   type WMDriver,
-  type WMWindow,
-  type WMSpace,
-  type WMTileLayout,
-} from "../src/window-manager/_c3-stub.js";
+  type Window as WMWindow,
+  type Space as WMSpace,
+  type Layout as WMTileLayout,
+  type MoveTarget,
+} from "../src/window-manager/driver-factory.js";
 
 // ─── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -24,10 +25,7 @@ interface MoveCall {
   windowId: number;
   space?: number;
   display?: number;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
+  frame?: { x?: number; y?: number; w?: number; h?: number };
 }
 
 class FakeDriver implements WMDriver {
@@ -45,9 +43,9 @@ class FakeDriver implements WMDriver {
   async focusWindow(id: number): Promise<void> { this.focusCalls.push(id); }
   async moveWindow(
     id: number,
-    opts: Omit<MoveCall, "windowId">,
+    to: MoveTarget,
   ): Promise<void> {
-    this.moveCalls.push({ windowId: id, ...opts });
+    this.moveCalls.push({ windowId: id, ...to });
   }
   async tile(layout: WMTileLayout): Promise<void> {
     if (this.failTile) throw new Error("yabai: space has no leaf");
@@ -76,10 +74,7 @@ describe("WmTools.moveWindow", () => {
       windowId: 42,
       space: 2,
       display: undefined,
-      x: 100,
-      y: 200,
-      w: 640,
-      h: 480,
+      frame: { x: 100, y: 200, w: 640, h: 480 },
     });
   });
 
@@ -123,7 +118,7 @@ describe("WmTools.tile", () => {
     const driver = new FakeDriver();
     driver.failTile = true;
     const tools = new WmTools({ driver });
-    const res = await tools.tile({ layout: "bsp" });
+    const res = await tools.tile({ layout: "full" });
     assert.equal(res.ok, false);
     if (!res.ok) {
       assert.equal(res.error, "driver-failure");
@@ -172,9 +167,17 @@ describe("WmTools.listWindows", () => {
   test("returns windows + spaces from the driver", async () => {
     const driver = new FakeDriver();
     driver.windows = [
-      { id: 1, app: "Terminal", title: "agent-coder-1", space: 1 },
+      {
+        id: 1,
+        app: "Terminal",
+        title: "agent-coder-1",
+        space: 1,
+        display: 1,
+        frame: { x: 0, y: 0, w: 800, h: 600 },
+        focused: true,
+      },
     ];
-    driver.spaces = [{ index: 1, visible: true }];
+    driver.spaces = [{ index: 1, display: 1, type: "bsp" }];
     const tools = new WmTools({ driver });
     const res = await tools.listWindows();
     assert.equal(res.ok, true);
@@ -215,7 +218,7 @@ describe("WmTools — WMUnavailableError handling", () => {
     const tools = new WmTools({ selectDriver });
     const results = await Promise.all([
       tools.moveWindow({ windowId: 1 }),
-      tools.tile({ layout: "bsp" }),
+      tools.tile({ layout: "full" }),
       tools.focus({ windowId: 1 }),
       tools.spaceSwitch({ index: 1 }),
       tools.listWindows(),

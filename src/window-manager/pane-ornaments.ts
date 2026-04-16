@@ -16,7 +16,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { WMDriver, WMWindow } from "./_c3-stub.js";
+import type { WMDriver, Window as WMWindow } from "./driver-factory.js";
 
 const execFileAsync = promisify(execFile);
 
