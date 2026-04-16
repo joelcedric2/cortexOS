@@ -21,6 +21,10 @@ import { homedir } from "node:os";
  *   - vision_llm         — the vision-brief LLM polish path fired (Haiku)
  *   - voice_intent       — the voice intent extractor routed a transcript
  *
+ * Phase 9 adds camera-side actions (always on-demand, never looped):
+ *   - camera_capture     — a single AVFoundation frame was captured
+ *   - camera_llm         — Claude Sonnet vision polish path fired for a camera frame
+ *
  * Phase 12 adds app-driver mutations:
  *   - app_mutation       — a native-app driver (Safari, Notes, Reminders,
  *                           Music, Finder, Mail, Calendar, Messages) performed
@@ -37,6 +41,8 @@ export type AuditAction =
   | "ocr"
   | "vision_llm"
   | "voice_intent"
+  | "camera_capture"
+  | "camera_llm"
   | "app_mutation";
 
 export interface AuditEntry {

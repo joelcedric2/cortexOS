@@ -24,7 +24,8 @@ export type VoiceIntentKind =
   | "pause"
   | "resume"
   | "config"
-  | "chat";
+  | "chat"
+  | "camera-query";
 
 export interface VoiceIntent {
   kind: VoiceIntentKind;
@@ -32,9 +33,11 @@ export interface VoiceIntent {
    * Optional structured payload. For `task` + `chat`, the original trimmed
    * transcript is included so downstream code can dispatch it. For control
    * intents (kill/pause/resume/config) the original phrase is included so
-   * audit entries can record what the user actually said.
+   * audit entries can record what the user actually said. For
+   * `camera-query` the `question` field carries the exact transcript that
+   * should be sent downstream to the camera/vision tool.
    */
-  payload?: { transcript: string };
+  payload?: { transcript: string; question?: string };
   /** 1.0 for a direct match, 0.5 for the `task` fallback. */
   confidence: number;
 }
@@ -53,6 +56,18 @@ const RESUME_REGEX = /^(continue|resume|go\s*on|keep\s*going|carry\s*on)$/i;
 // (optional comma, any trailing payload).
 const CONFIG_REGEX = /^nchinda,?\s+(set|config(?:ure)?|change|update)\b/i;
 
+// Phase 9 — camera queries. Deliberately tight: "what am I looking at",
+// "what do you see", "look at this/that". Anchored at the start so that
+// embedded occurrences inside a longer task still route to `task`.
+const CAMERA_QUERY_REGEX =
+  /^(what\s+am\s+i\s+looking\s+at|what\s+do\s+you\s+see|look\s+at\s+(this|that))\b/i;
+
+// Questions that start with "is this ..." or "is that ..." and end with
+// a question mark. Covers "is this safe to eat?", "is that a bird?",
+// etc. Kept deliberately narrow — we do NOT want "is this mission on
+// track?" style meta-questions to trigger camera capture.
+const CAMERA_IS_THIS_REGEX = /^is\s+(this|that)\b.*\?$/i;
+
 /**
  * Extract a VoiceIntent from a raw transcript.
  *
@@ -70,6 +85,10 @@ export function extractIntent(transcript: string): VoiceIntent {
   }
 
   const normalized = normalize(transcript);
+  // Keep the punctuation-preserving form around for the "?"-anchored
+  // Phase 9 `camera-query` regex. Trailing whitespace is stripped either
+  // way so "is that a bird?   " still matches.
+  const punctPreserved = transcript.trim();
 
   if (normalized.length === 0) {
     return { kind: "task", payload: { transcript: "" }, confidence: 0 };
@@ -88,6 +107,25 @@ export function extractIntent(transcript: string): VoiceIntent {
     return {
       kind: "config",
       payload: { transcript: normalized },
+      confidence: 1,
+    };
+  }
+
+  // Phase 9 — camera-query. Two shapes:
+  //   1. Anchored openers ("what am I looking at", "what do you see",
+  //      "look at this/that").
+  //   2. "is this/that …?" questions (trailing "?" required).
+  if (CAMERA_QUERY_REGEX.test(normalized)) {
+    return {
+      kind: "camera-query",
+      payload: { transcript: normalized, question: normalized },
+      confidence: 1,
+    };
+  }
+  if (CAMERA_IS_THIS_REGEX.test(punctPreserved)) {
+    return {
+      kind: "camera-query",
+      payload: { transcript: normalized, question: punctPreserved },
       confidence: 1,
     };
   }
