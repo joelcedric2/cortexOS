@@ -39,7 +39,10 @@ export interface DedupDeps {
 
 const DEFAULTS = {
   similarityThreshold: 0.92,
-  keepStrategy: "newest" as const,
+  // "highest_similarity" is the safe default per phase-7 REVIEW §P-1: a fresh
+  // adversarial near-duplicate would otherwise evict trusted older canon rows
+  // under "newest". Callers can still opt in to "newest" explicitly.
+  keepStrategy: "highest_similarity" as const,
   dryRun: true,
   batchSize: 1000,
   neighbourK: 10,

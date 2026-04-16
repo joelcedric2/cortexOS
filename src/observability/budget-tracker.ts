@@ -200,8 +200,12 @@ export class BudgetTracker {
       updated_at: nowIso,
     });
 
-    const d_in = Math.max(0, Math.floor(event.tokens_in ?? 0));
-    const d_out = Math.max(0, Math.floor(event.tokens_out ?? 0));
+    // Per-event token cap (phase-7 REVIEW §P-2): prevents a poisoned caller
+    // from inflating peer cost unboundedly. 1M in / 1M out per single event
+    // is far above any legitimate Claude model response.
+    const TOKEN_CAP = 1_000_000;
+    const d_in = Math.min(TOKEN_CAP, Math.max(0, Math.floor(event.tokens_in ?? 0)));
+    const d_out = Math.min(TOKEN_CAP, Math.max(0, Math.floor(event.tokens_out ?? 0)));
     const d_duration = Math.max(0, Math.floor(event.duration_ms ?? 0));
     const d_calls = event.tool_call ? 1 : 0;
     const d_cost = event.model
