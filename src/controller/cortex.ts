@@ -32,6 +32,11 @@ import {
 } from "../scheduler/api.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { AudioState } from "../voice/audio-state.js";
+import { AudioStateMachine } from "../voice/audio-state.js";
+import { WakeWordDetector, SpeechToText, TextToSpeech } from "../voice/_a-stub.js";
+import { VoiceWSBridge } from "../voice/ws-bridge.js";
+import { VoiceOrchestrator } from "../voice/voice-orchestrator.js";
 
 export interface CortexConfig {
   sessionName: string;
@@ -65,6 +70,17 @@ export class CortexController {
    */
   private schedulerRunFactory: (() => SchedulerRun) | null = null;
   private briefStore: BriefStore | null = null;
+  private voiceStateMachine: AudioStateMachine | null = null;
+  private voiceWSBridge: VoiceWSBridge | null = null;
+  private voiceOrchestrator: VoiceOrchestrator | null = null;
+  private wakeWordDetector: WakeWordDetector | null = null;
+  /**
+   * Factory producing the voice onTask callback. Injected by the caller so
+   * the controller doesn't have to import AutonomyLoop directly (same lazy
+   * pattern as `schedulerRunFactory`). When absent, a warning-logging echo
+   * handler is used as a fallback.
+   */
+  private voiceRunFactory: ((transcript: string) => Promise<string>) | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -148,6 +164,46 @@ export class CortexController {
       }
     }
 
+    // Boot voice subsystem behind CORTEXOS_VOICE=on flag.
+    if (process.env.CORTEXOS_VOICE === "on") {
+      try {
+        this.voiceStateMachine = new AudioStateMachine();
+        this.wakeWordDetector = new WakeWordDetector();
+        const stt = new SpeechToText();
+        const tts = new TextToSpeech();
+
+        this.voiceWSBridge = new VoiceWSBridge({
+          stateMachine: this.voiceStateMachine,
+        });
+
+        const onTask: (transcript: string) => Promise<string> =
+          this.voiceRunFactory
+            ? this.voiceRunFactory
+            : async (transcript) => {
+                console.warn(
+                  `[CortexOS] Voice task received but no run factory is set — echoing. Transcript: ${transcript}`,
+                );
+                return `Received: ${transcript}`;
+              };
+
+        this.voiceOrchestrator = new VoiceOrchestrator({
+          wakeWord: this.wakeWordDetector,
+          stt,
+          tts,
+          stateMachine: this.voiceStateMachine,
+          bus: this.bus,
+          onTask,
+        });
+
+        await this.voiceWSBridge.start();
+        await this.voiceOrchestrator.start();
+        console.log("[CortexOS] Voice subsystem started (ws://localhost:3100/audio)");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Voice subsystem failed to start: ${message}`);
+      }
+    }
+
     this.initialized = true;
     console.log("[CortexOS] Initialized — pgvector connected, embedder loaded");
   }
@@ -167,6 +223,23 @@ export class CortexController {
 
   getScheduler(): Scheduler | null {
     return this.scheduler;
+  }
+
+  /**
+   * Inject the factory producing the voice onTask callback. Call before
+   * `initialize()` so the voice orchestrator routes transcripts into the
+   * autonomy loop (same lazy pattern as `setSchedulerRunFactory`).
+   */
+  setVoiceRunFactory(factory: (transcript: string) => Promise<string>): void {
+    this.voiceRunFactory = factory;
+  }
+
+  /**
+   * Current audio state. Returns 'idle' when the voice subsystem is not
+   * active (CORTEXOS_VOICE not set or initialize() hasn't run).
+   */
+  getVoiceState(): AudioState {
+    return this.voiceStateMachine?.getState() ?? "idle";
   }
 
   /**
@@ -403,6 +476,36 @@ export class CortexController {
 
   async shutdown(): Promise<void> {
     console.log("[CortexOS] Shutting down...");
+
+    // Stop voice subsystem before anything else so the WS bridge
+    // releases its TCP port promptly.
+    if (this.voiceOrchestrator) {
+      try {
+        this.voiceOrchestrator.stop();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Voice orchestrator stop error: ${message}`);
+      }
+      this.voiceOrchestrator = null;
+    }
+    if (this.voiceWSBridge) {
+      try {
+        await this.voiceWSBridge.stop();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Voice WS bridge stop error: ${message}`);
+      }
+      this.voiceWSBridge = null;
+    }
+    if (this.wakeWordDetector) {
+      try {
+        this.wakeWordDetector.stop();
+      } catch {
+        // best-effort
+      }
+      this.wakeWordDetector = null;
+    }
+    this.voiceStateMachine = null;
 
     // Stop scheduler first — awaits in-flight runs.
     if (this.scheduler) {
