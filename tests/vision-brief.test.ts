@@ -7,7 +7,8 @@ import {
   PRIVATE_APPS,
   type VisionSentiment,
 } from "../src/perception/vision-brief.js";
-import type { ScreenFrame, OcrResult } from "../src/perception/_c1-stub.js";
+import type { ScreenFrame } from "../src/perception/screen-capture.js";
+import type { OcrResult } from "../src/perception/ocr.js";
 
 function makeFrame(overrides: Partial<ScreenFrame> = {}): ScreenFrame {
   return {
@@ -23,7 +24,7 @@ function makeFrame(overrides: Partial<ScreenFrame> = {}): ScreenFrame {
 }
 
 function ocrReturning(text: string, blocks: OcrResult["blocks"] = []) {
-  return async (_p: string): Promise<OcrResult> => ({ text, blocks });
+  return async (_p: string): Promise<OcrResult> => ({ text, blocks, duration_ms: 0 });
 }
 
 describe("vision-brief — local-only mode", () => {
@@ -45,7 +46,7 @@ describe("vision-brief — local-only mode", () => {
     let ocrCalled = false;
     const ocr = async (_p: string): Promise<OcrResult> => {
       ocrCalled = true;
-      return { text: "should-not-be-used", blocks: [] };
+      return { text: "should-not-be-used", blocks: [], duration_ms: 0 };
     };
     const frame = makeFrame({ ocr_text: "inline-ocr-text" });
     const brief = await buildBrief(frame, { ocr });

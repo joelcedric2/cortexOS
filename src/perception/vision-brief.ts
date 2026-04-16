@@ -21,8 +21,8 @@
  * via the returned brief's summary.
  */
 import { z } from "zod";
-import type { ScreenFrame, OcrResult } from "./_c1-stub.js";
-import { ocrImageStub } from "./_c1-stub.js";
+import type { ScreenFrame } from "./screen-capture.js";
+import { ocrImage, type OcrResult } from "./ocr.js";
 
 // --------------------------- Types ----------------------------------------
 
@@ -197,7 +197,7 @@ export async function buildBrief(
   opts: VisionBriefOptions = {},
 ): Promise<VisionBrief> {
   const mode = opts.mode ?? "local-only";
-  const ocrFn = deps.ocr ?? ocrImageStub;
+  const ocrFn = deps.ocr ?? defaultOcrFn;
 
   const visibleText = await resolveVisibleText(frame, ocrFn);
   const local = buildLocalBrief(frame, visibleText);
@@ -339,6 +339,16 @@ function describeHeuristic(
   if (sentiment === "idle") return "no active content detected";
   if (visibleText.trim().length === 0) return "no visible text captured";
   return "working in the foreground window";
+}
+
+/**
+ * Default OCR fn used when the caller does not inject one. Delegates to the
+ * real Apple-Vision helper via {@link ocrImage}; any failure (binary missing,
+ * file missing, permission) bubbles up and is swallowed by the caller below,
+ * so briefs never fail just because OCR is unavailable.
+ */
+async function defaultOcrFn(pngPath: string): Promise<OcrResult> {
+  return ocrImage(pngPath);
 }
 
 async function resolveVisibleText(
