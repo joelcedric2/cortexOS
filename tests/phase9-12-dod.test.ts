@@ -76,7 +76,7 @@ describe("DoD P9 — nchinda_look + voice camera routing", () => {
 
     const ocr = async () => ({ text: "COFFEE SHOP MENU" });
 
-    const haikuFetch: typeof fetch = async () =>
+    const planFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
           content: [
@@ -91,7 +91,7 @@ describe("DoD P9 — nchinda_look + voice camera routing", () => {
 
     const result = await nchindaLook(
       { question: "what am I looking at", mode: "still" },
-      { capture, ocr, haikuFetch, apiKey: "dod-test-key" },
+      { capture, ocr, planFetch, apiKey: "dod-test-key" },
     );
 
     assert.equal(result.frame!.id, "p9-dod-frame-1", "frame.id round-trips");
@@ -172,7 +172,7 @@ function briefFn(): (f: LoopFrame) => Promise<ObservationBrief> {
   });
 }
 
-function scriptedPlanner(plans: PlanResponse[]): AgentLoopDeps["haikuFetch"] {
+function scriptedPlanner(plans: PlanResponse[]): AgentLoopDeps["planFetch"] {
   let i = 0;
   return async (): Promise<PlanResponse> => {
     if (i >= plans.length) throw new Error("ran out of scripted plans");
@@ -203,7 +203,7 @@ describe("DoD P10 — runComputerUse happy + escalation", () => {
       capturer,
       brief: briefFn(),
       policy: { isIrreversible: () => false },
-      haikuFetch: scriptedPlanner(plans),
+      planFetch: scriptedPlanner(plans),
     };
     const result = await runComputerUse(
       { goal: "click Save button" },
@@ -255,7 +255,7 @@ describe("DoD P10 — runComputerUse happy + escalation", () => {
       capturer,
       brief: briefFn(),
       policy,
-      haikuFetch: scriptedPlanner(plans),
+      planFetch: scriptedPlanner(plans),
     };
 
     const result = await runComputerUse({ goal: "send the draft" }, deps);

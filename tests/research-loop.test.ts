@@ -59,7 +59,7 @@ function scriptedFetch(
   };
 }
 
-function haikuContent(json: unknown) {
+function llmContent(json: unknown) {
   return {
     content: [{ type: "text", text: JSON.stringify(json) }],
   };
@@ -112,9 +112,9 @@ describe("runResearch — happy path", () => {
     );
 
     const { fetchImpl } = scriptedFetch([
-      { body: haikuContent(THREE_HYPOTHESES) },
-      { body: haikuContent(SCORES_TLS_WINS) },
-      { body: haikuContent(BRIEF_DRAFT) },
+      { body: llmContent(THREE_HYPOTHESES) },
+      { body: llmContent(SCORES_TLS_WINS) },
+      { body: llmContent(BRIEF_DRAFT) },
     ]);
 
     const brief = await runResearch("Why is example.com unreachable?", {
@@ -168,9 +168,9 @@ describe("runResearch — happy path", () => {
     };
 
     const { fetchImpl } = scriptedFetch([
-      { body: haikuContent(THREE_HYPOTHESES) },
-      { body: haikuContent(SCORES_TLS_WINS) },
-      { body: haikuContent(BRIEF_DRAFT) },
+      { body: llmContent(THREE_HYPOTHESES) },
+      { body: llmContent(SCORES_TLS_WINS) },
+      { body: llmContent(BRIEF_DRAFT) },
     ]);
 
     const brief = await runResearch("why?", {
@@ -188,9 +188,9 @@ describe("runResearch — happy path", () => {
 describe("runResearch — depth caps", () => {
   test("depth=normal caps to 3 hypotheses even if Haiku returns 5", async () => {
     const { fetchImpl } = scriptedFetch([
-      { body: haikuContent(FIVE_HYPOTHESES) },
+      { body: llmContent(FIVE_HYPOTHESES) },
       {
-        body: haikuContent({
+        body: llmContent({
           scores: [
             { id: "h1", likelihood: 0.5, verdict: "inconclusive" },
             { id: "h2", likelihood: 0.5, verdict: "inconclusive" },
@@ -199,7 +199,7 @@ describe("runResearch — depth caps", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           evidence: [],
           open_questions: [],
           recommended_action: "inconclusive",
@@ -218,9 +218,9 @@ describe("runResearch — depth caps", () => {
 
   test("depth=deep allows up to 5 hypotheses", async () => {
     const { fetchImpl } = scriptedFetch([
-      { body: haikuContent(FIVE_HYPOTHESES) },
+      { body: llmContent(FIVE_HYPOTHESES) },
       {
-        body: haikuContent({
+        body: llmContent({
           scores: [
             { id: "h1", likelihood: 0.5, verdict: "inconclusive" },
             { id: "h2", likelihood: 0.5, verdict: "inconclusive" },
@@ -231,7 +231,7 @@ describe("runResearch — depth caps", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           evidence: [],
           open_questions: [],
           recommended_action: "inconclusive",
@@ -253,7 +253,7 @@ describe("runResearch — budget enforcement", () => {
   test("slow Haiku call aborts when timeBudgetMs expires", async () => {
     const { fetchImpl } = scriptedFetch([
       // First call takes forever — outer controller must kill it
-      { delayMs: 5_000, body: haikuContent(THREE_HYPOTHESES) },
+      { delayMs: 5_000, body: llmContent(THREE_HYPOTHESES) },
     ]);
 
     const t0 = Date.now();
@@ -275,7 +275,7 @@ describe("runResearch — malformed Haiku output", () => {
   test("zod mismatch surfaces as research-failed brief, no throw", async () => {
     const { fetchImpl } = scriptedFetch([
       {
-        body: haikuContent({
+        body: llmContent({
           hypotheses: [{ h: "bad", prior: "not-a-number", probe: "p" }],
         }),
       },
@@ -349,9 +349,9 @@ describe("runResearch — redaction", () => {
 describe("runResearch — bus may be omitted", () => {
   test("runs end-to-end without a bus", async () => {
     const { fetchImpl } = scriptedFetch([
-      { body: haikuContent(THREE_HYPOTHESES) },
-      { body: haikuContent(SCORES_TLS_WINS) },
-      { body: haikuContent(BRIEF_DRAFT) },
+      { body: llmContent(THREE_HYPOTHESES) },
+      { body: llmContent(SCORES_TLS_WINS) },
+      { body: llmContent(BRIEF_DRAFT) },
     ]);
 
     const brief = await runResearch("q", {

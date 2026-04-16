@@ -6,7 +6,7 @@
  * up a full multi-agent swarm ("multi-agent", planner + specialists).
  *
  * This file contains PURE TYPES. Implementations live in sibling files
- * (`haiku-classifier.ts`, `heuristic-classifier.ts`). Agent A (Autonomy Loop)
+ * (`sonnet-classifier.ts`, `heuristic-classifier.ts`). Agent A (Autonomy Loop)
  * depends on this contract — do not change the shape without coordination.
  */
 
@@ -38,7 +38,7 @@ export interface ClassifierContext {
 
 /**
  * Options a caller can force at classify-time. Useful for tests and for the
- * loop's fallback chain (e.g. "Haiku just errored, re-run with heuristic").
+ * loop's fallback chain (e.g. "LLM just errored, re-run with heuristic").
  */
 export interface ClassifyOptions {
   /** Force the pure-code heuristic even if an LLM classifier is wired up. */

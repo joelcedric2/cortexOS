@@ -1,7 +1,7 @@
 /**
  * Round-trip test for the nchinda_research MCP handler.
  *
- * Wires the ResearchTool with an in-memory event bus + a scripted Haiku
+ * Wires the ResearchTool with an in-memory event bus + a scripted LLM
  * fetch, calls `.research(...)`, and verifies the Brief + the emitted
  * research_brief_emitted event.
  */
@@ -11,7 +11,7 @@ import { ResearchTool } from "../src/mcp/research-tool.js";
 import { createEventBus } from "../src/ipc/event-bus.js";
 import type { AgentEvent } from "../src/ipc/event-bus.js";
 
-function haikuContent(json: unknown) {
+function llmContent(json: unknown) {
   return {
     content: [{ type: "text", text: JSON.stringify(json) }],
   };
@@ -36,7 +36,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
 
     const fetchImpl = scriptedFetch([
       {
-        body: haikuContent({
+        body: llmContent({
           hypotheses: [
             { h: "cache poisoned", prior: 0.4, probe: "clear and retry" },
             { h: "rate-limited", prior: 0.6, probe: "sleep 60 and retry" },
@@ -44,7 +44,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           scores: [
             { id: "h1", likelihood: 0.2, verdict: "falsified" },
             { id: "h2", likelihood: 0.9, verdict: "confirmed" },
@@ -52,7 +52,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           winning: "rate-limited",
           evidence: ["retry-after header = 60"],
           open_questions: [],
@@ -86,7 +86,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
   test("depth=deep propagates to the loop (5 hypothesis cap)", async () => {
     const fetchImpl = scriptedFetch([
       {
-        body: haikuContent({
+        body: llmContent({
           hypotheses: [
             { h: "A", prior: 0.2, probe: "pa" },
             { h: "B", prior: 0.2, probe: "pb" },
@@ -97,7 +97,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           scores: [
             { id: "h1", likelihood: 0.5, verdict: "inconclusive" },
             { id: "h2", likelihood: 0.5, verdict: "inconclusive" },
@@ -108,7 +108,7 @@ describe("ResearchTool.research (MCP round-trip)", () => {
         }),
       },
       {
-        body: haikuContent({
+        body: llmContent({
           evidence: [],
           open_questions: [],
           recommended_action: "gather more data",

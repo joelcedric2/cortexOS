@@ -156,9 +156,9 @@ describe("createSkill", () => {
     );
   });
 
-  test("throws CreateSkillError on Haiku design failure", async () => {
+  test("throws CreateSkillError on LLM design failure", async () => {
     const deps = makeDeps({
-      callHaiku: async () => { throw new Error("haiku timeout"); },
+      callHaiku: async () => { throw new Error("llm timeout"); },
     });
     await assert.rejects(
       () => createSkill({ need: "x" }, deps),

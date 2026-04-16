@@ -4,7 +4,7 @@ import {
   HeuristicClassifier,
   createHeuristicClassifier,
 } from "../src/classifier/heuristic-classifier.js";
-import { HaikuClassifier } from "../src/classifier/haiku-classifier.js";
+import { LlmClassifier } from "../src/classifier/sonnet-classifier.js";
 import { createClassifier } from "../src/classifier/index.js";
 
 describe("HeuristicClassifier — signal table", () => {
@@ -76,7 +76,7 @@ describe("HeuristicClassifier — signal table", () => {
   });
 });
 
-describe("HaikuClassifier — mocked fetch", () => {
+describe("LlmClassifier — mocked fetch", () => {
   const makeOkFetch = (payload: unknown): typeof fetch =>
     async () =>
       new Response(JSON.stringify(payload), {
@@ -85,7 +85,7 @@ describe("HaikuClassifier — mocked fetch", () => {
       });
 
   test("parses well-formed JSON into a ClassificationResult", async () => {
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: makeOkFetch({
         content: [
@@ -109,7 +109,7 @@ describe("HaikuClassifier — mocked fetch", () => {
   });
 
   test("extracts JSON even when wrapped in prose", async () => {
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: makeOkFetch({
         content: [
@@ -134,14 +134,14 @@ describe("HaikuClassifier — mocked fetch", () => {
   test("falls back to heuristic on 500", async () => {
     const mockFetch: typeof fetch = async () =>
       new Response("boom", { status: 500 });
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: mockFetch,
       timeoutMs: 2000,
     });
     const r = await c.classify("summarize the inbox");
     assert.equal(r.complexity, "single-shot");
-    assert.match(r.rationale, /haiku-fallback/);
+    assert.match(r.rationale, /llm-fallback/);
   });
 
   test("force_heuristic bypasses the API entirely", async () => {
@@ -150,7 +150,7 @@ describe("HaikuClassifier — mocked fetch", () => {
       called = true;
       return new Response("{}", { status: 200 });
     };
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: mockFetch,
       timeoutMs: 2000,
@@ -165,7 +165,7 @@ describe("HaikuClassifier — mocked fetch", () => {
       called = true;
       return new Response("{}", { status: 200 });
     };
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: undefined,
       fetchImpl: mockFetch,
       timeoutMs: 2000,
@@ -176,7 +176,7 @@ describe("HaikuClassifier — mocked fetch", () => {
   });
 
   test("malformed text body triggers heuristic fallback", async () => {
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: makeOkFetch({
         content: [{ type: "text", text: "not json at all" }],
@@ -185,11 +185,11 @@ describe("HaikuClassifier — mocked fetch", () => {
     });
     const r = await c.classify("summarize the inbox");
     assert.equal(r.complexity, "single-shot");
-    assert.match(r.rationale, /haiku-fallback/);
+    assert.match(r.rationale, /llm-fallback/);
   });
 
   test("schema rejection (bad confidence type) falls back", async () => {
-    const c = new HaikuClassifier({
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: makeOkFetch({
         content: [
@@ -206,11 +206,11 @@ describe("HaikuClassifier — mocked fetch", () => {
       timeoutMs: 2000,
     });
     const r = await c.classify("check status");
-    assert.match(r.rationale, /haiku-fallback/);
+    assert.match(r.rationale, /llm-fallback/);
   });
 
-  test("very long task (>100 words) still classifiable via haiku stub", async () => {
-    const c = new HaikuClassifier({
+  test("very long task (>100 words) still classifiable via LLM stub", async () => {
+    const c = new LlmClassifier({
       apiKey: "test-key",
       fetchImpl: makeOkFetch({
         content: [

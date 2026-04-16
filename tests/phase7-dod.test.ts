@@ -487,9 +487,9 @@ describe("Phase 7 DoD §5 — budget tracker totalsInWindow", () => {
     const clock = Date.parse("2026-04-15T12:00:00.000Z");
     const tracker = new BudgetTracker({ db, now: () => clock });
 
-    tracker.record({ agentId: "a1", role: "coder",    tokens_in: 1000, tokens_out: 500,  duration_ms: 10, model: "haiku" });
+    tracker.record({ agentId: "a1", role: "coder",    tokens_in: 1000, tokens_out: 500,  duration_ms: 10, model: "sonnet" });
     tracker.record({ agentId: "a2", role: "reviewer", tokens_in: 2000, tokens_out: 1000, duration_ms: 20, model: "sonnet" });
-    tracker.record({ agentId: "a3", role: "tester",   tokens_in:  500, tokens_out:  200, duration_ms:  5, model: "haiku" });
+    tracker.record({ agentId: "a3", role: "tester",   tokens_in:  500, tokens_out:  200, duration_ms:  5, model: "sonnet" });
 
     const totals = tracker.totalsInWindow(7);
     assert.equal(totals.tokens_in, 3500);

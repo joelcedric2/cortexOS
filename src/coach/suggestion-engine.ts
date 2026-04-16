@@ -1,7 +1,7 @@
 /**
  * Phase 13 — Real-time Writing Coach: single-shot suggestion engine.
  *
- * Given a {@link DraftSample}, asks Claude Haiku for ONE specific, actionable
+ * Given a {@link DraftSample}, asks Claude Sonnet for ONE specific, actionable
  * improvement. Returns `null` if the draft is fine (or on any error — every
  * failure is swallowed so the coach never blocks or blows up the UI).
  *
@@ -16,11 +16,11 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { DraftSample } from "./draft-watcher.js";
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_TIMEOUT_MS = 5_000;
 
-// Mirror of the redactor in src/classifier/haiku-classifier.ts — keep the
+// Mirror of the redactor in src/classifier/sonnet-classifier.ts — keep the
 // label list tight so we never surface raw error text to users.
 const SAFE_REASON_PATTERNS: ReadonlyArray<{ match: RegExp; label: string }> = [
   { match: /abort|timeout|deadline/i, label: "timeout" },
@@ -50,7 +50,7 @@ export interface CoachSuggestion {
 
 export interface SuggestOptions {
   /** Injected for tests. Defaults to the global fetch. */
-  haikuFetch?: typeof fetch;
+  llmFetch?: typeof fetch;
   /** Defaults to process.env.ANTHROPIC_API_KEY. */
   apiKey?: string;
   /** Override the 5s timeout. */
@@ -59,7 +59,7 @@ export interface SuggestOptions {
 
 // ────────────────────────── Internal schema ────────────────────────────────
 
-const HaikuResponseSchema = z.union([
+const LlmResponseSchema = z.union([
   z.null(),
   z.object({
     suggestion: z.string().min(1).max(500),
@@ -84,7 +84,7 @@ const SYSTEM_PROMPT =
 
 /**
  * Returns a single suggestion for the given draft sample, or `null` if the
- * Haiku call declines, times out, errors, or is not configured.
+ * LLM call declines, times out, errors, or is not configured.
  */
 export async function suggestOnce(
   sample: DraftSample,
@@ -94,7 +94,7 @@ export async function suggestOnce(
   if (!apiKey) return null;
   if (!sample.value || !sample.value.trim()) return null;
 
-  const fetchImpl = opts.haikuFetch ?? fetch;
+  const fetchImpl = opts.llmFetch ?? fetch;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   const controller = new AbortController();
@@ -110,7 +110,7 @@ export async function suggestOnce(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 200,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: buildUserPrompt(sample) }],
@@ -128,7 +128,7 @@ export async function suggestOnce(
     const rawJson = extractJsonOrNull(text);
     if (rawJson === undefined) return null;
 
-    const parsed = HaikuResponseSchema.parse(rawJson);
+    const parsed = LlmResponseSchema.parse(rawJson);
     if (parsed === null) return null;
 
     return {
@@ -168,7 +168,7 @@ function buildUserPrompt(sample: DraftSample): string {
 }
 
 /**
- * Returns true when the Haiku response text contains the sentinel
+ * Returns true when the LLM response text contains the sentinel
  * string — a sign of hallucinated prompt escape. Callers should
  * reject such responses.
  */
@@ -180,7 +180,7 @@ export function containsSentinel(
 }
 
 /**
- * Extracts a JSON value (object or literal `null`) from Haiku's text block.
+ * Extracts a JSON value (object or literal `null`) from the LLM's text block.
  * Returns:
  *   - `null` for a literal null token
  *   - a parsed object

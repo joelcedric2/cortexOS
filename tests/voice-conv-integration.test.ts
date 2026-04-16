@@ -177,7 +177,7 @@ describe("VoiceOrchestrator × Phase 14 conversation-intent", () => {
       },
       conversationIntent: {
         classify: async () => {
-          throw new Error("haiku exploded");
+          throw new Error("llm exploded");
         },
         route: async () => {
           throw new Error("should not be called");

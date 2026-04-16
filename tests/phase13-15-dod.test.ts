@@ -158,7 +158,7 @@ describe("Phase 13-15 DoD — P13 Writing Coach", () => {
       );
     };
     const suggestion = (await suggestOnce(sample, {
-      haikuFetch: mockHaiku,
+      llmFetch: mockHaiku,
       apiKey: "sk-test",
     })) as CoachSuggestion;
     assert.ok(suggestion, "suggestOnce should return a suggestion");

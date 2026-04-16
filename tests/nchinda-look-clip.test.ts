@@ -61,7 +61,7 @@ describe("nchinda_look — clip mode", () => {
     await withTempDir("p95-look-default", async (dir) => {
       const captureClip = fakeClipCapture(dir, 3);
       const ocr = async () => ({ text: "" });
-      const haikuFetch: typeof fetch = async (_url, init) => {
+      const llmFetch: typeof fetch = async (_url, init) => {
         return new Response(
           JSON.stringify({
             content: [{ type: "text", text: "A person sitting at a desk." }],
@@ -72,7 +72,7 @@ describe("nchinda_look — clip mode", () => {
 
       const result = await nchindaLook(
         { question: "what do you see" },
-        { captureClip, ocr, haikuFetch, apiKey: "k" },
+        { captureClip, ocr, llmFetch, apiKey: "k" },
       );
 
       assert.equal(result.mode, "clip");
@@ -91,7 +91,7 @@ describe("nchinda_look — clip mode", () => {
       const captureClip = fakeClipCapture(dir, 5);
       const ocr = async () => ({ text: "SIGN: EXIT" });
       let sonnetBody: any;
-      const haikuFetch: typeof fetch = async (_url, init) => {
+      const llmFetch: typeof fetch = async (_url, init) => {
         sonnetBody = JSON.parse((init?.body ?? "{}") as string);
         return new Response(
           JSON.stringify({
@@ -103,7 +103,7 @@ describe("nchinda_look — clip mode", () => {
 
       await nchindaLook(
         { question: "what sign is that" },
-        { captureClip, ocr, haikuFetch, apiKey: "k" },
+        { captureClip, ocr, llmFetch, apiKey: "k" },
       );
 
       // Verify multi-image structure.
@@ -129,7 +129,7 @@ describe("nchinda_look — clip mode", () => {
         return { text: "OCR CONTENT HERE" };
       };
       let sonnetBody: any;
-      const haikuFetch: typeof fetch = async (_url, init) => {
+      const llmFetch: typeof fetch = async (_url, init) => {
         sonnetBody = JSON.parse((init?.body ?? "{}") as string);
         return new Response(
           JSON.stringify({ content: [{ type: "text", text: "desc" }] }),
@@ -139,7 +139,7 @@ describe("nchinda_look — clip mode", () => {
 
       const result = await nchindaLook(
         {},
-        { captureClip, ocr, haikuFetch, apiKey: "k" },
+        { captureClip, ocr, llmFetch, apiKey: "k" },
       );
 
       // OCR should be called with the first keyframe path.
@@ -158,7 +158,7 @@ describe("nchinda_look — clip mode", () => {
       const captureClip = fakeClipCapture(dir, 2);
       const ocr = async () => ({ text: "HELLO" });
       let fetchCalled = false;
-      const haikuFetch: typeof fetch = async () => {
+      const llmFetch: typeof fetch = async () => {
         fetchCalled = true;
         return new Response("{}", { status: 200 });
       };
@@ -168,7 +168,7 @@ describe("nchinda_look — clip mode", () => {
       try {
         const result = await nchindaLook(
           {},
-          { captureClip, ocr, haikuFetch },
+          { captureClip, ocr, llmFetch },
         );
         assert.equal(fetchCalled, false);
         assert.match(result.description, /Local-only reply/);
@@ -201,7 +201,7 @@ describe("nchinda_look — still mode backward compat", () => {
       }) as any;
 
       const ocr = async () => ({ text: "" });
-      const haikuFetch: typeof fetch = async () =>
+      const llmFetch: typeof fetch = async () =>
         new Response(
           JSON.stringify({ content: [{ type: "text", text: "A wall." }] }),
           { status: 200 },
@@ -209,7 +209,7 @@ describe("nchinda_look — still mode backward compat", () => {
 
       const result = await nchindaLook(
         { mode: "still" },
-        { capture, ocr, haikuFetch, apiKey: "k" },
+        { capture, ocr, llmFetch, apiKey: "k" },
       );
 
       assert.equal(capturedStill, true);
@@ -240,7 +240,7 @@ describe("nchinda_look — mode selection", () => {
       }) as any;
       const captureClip = fakeClipCapture(dir, 1);
       const ocr = async () => ({ text: "" });
-      const haikuFetch: typeof fetch = async () =>
+      const llmFetch: typeof fetch = async () =>
         new Response(
           JSON.stringify({ content: [{ type: "text", text: "ok" }] }),
           { status: 200 },
@@ -248,7 +248,7 @@ describe("nchinda_look — mode selection", () => {
 
       await nchindaLook(
         { mode: "clip" },
-        { capture, captureClip, ocr, haikuFetch, apiKey: "k" },
+        { capture, captureClip, ocr, llmFetch, apiKey: "k" },
       );
 
       assert.equal(usedStill, false, "single-frame capture must NOT be invoked in clip mode");

@@ -7,7 +7,7 @@
  *   1. capture  — ScreenCapturer grabs one fresh frame
  *   2. brief    — VisionBrief summarises what's on screen
  *   3. plan     — Sonnet vision call proposes the next action (see
- *                 `haikuFetch` test seam; the production caller passes
+ *                 `planFetch` test seam; the production caller passes
  *                 an LLM fetcher that hits the Messages API)
  *   4. **policy gate** — `policy.isIrreversible(action)` short-circuits:
  *                        the loop escalates to the user and returns a
@@ -133,10 +133,10 @@ export interface AgentLoopDeps {
   capturer: LoopCapturer;
   brief: LoopBrief;
   policy: LoopPolicy;
-  /** Test seam for the planner. Name kept as `haikuFetch` for parity
+  /** Test seam for the planner. Name kept as `planFetch` for parity
    *  with nchinda-see's fetchImpl naming; production supplies the
    *  Sonnet-vision-backed implementation. */
-  haikuFetch?: PlanFn;
+  planFetch?: PlanFn;
   apiKey?: string;
   audit?: AuditLog;
   now?: () => number;
@@ -155,9 +155,9 @@ export async function runComputerUse(
   const maxSteps = task.maxSteps ?? AGENT_LOOP_DEFAULTS.maxSteps;
   const timeBudgetMs = task.timeBudgetMs ?? AGENT_LOOP_DEFAULTS.timeBudgetMs;
   const now = deps.now ?? (() => Date.now());
-  const plan = deps.haikuFetch;
+  const plan = deps.planFetch;
   if (!plan) {
-    throw new Error("runComputerUse: `haikuFetch` planner is required");
+    throw new Error("runComputerUse: `planFetch` planner is required");
   }
 
   const deadline = now() + timeBudgetMs;

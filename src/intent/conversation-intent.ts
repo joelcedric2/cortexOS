@@ -10,13 +10,13 @@
  * and the VoiceOrchestrator integration.
  *
  * Design rules:
- *   1. Haiku is optional — the module must work (with reduced precision)
+ *   1. The LLM is optional — the module must work (with reduced precision)
  *      when no API key is present. We always run a rule-based heuristic as
  *      the fallback + as the prior the LLM result is validated against.
- *   2. Haiku has a hard timeout (default 6s). On timeout / network error /
+ *   2. The LLM has a hard timeout (default 6s). On timeout / network error /
  *      schema mismatch we redact the rationale and fall back silently.
  *   3. No secret ever leaves the module. The `rationale` surface is
- *      whitelisted in the same style as `haiku-classifier.ts`.
+ *      whitelisted in the same style as `sonnet-classifier.ts`.
  */
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -50,14 +50,14 @@ export interface ConvIntent {
   transcript: string;
   ts: string; // ISO 8601
   /** Provenance — "rule" when the heuristic path produced the result. */
-  source: "rule" | "haiku" | "haiku-fallback";
+  source: "rule" | "llm" | "llm-fallback";
   /** Redacted fallback reason, if applicable. */
   fallback_reason?: string;
 }
 
 export interface ClassifyConvOptions {
   /** Injected fetch for tests. Defaults to global `fetch`. */
-  haikuFetch?: typeof fetch;
+  llmFetch?: typeof fetch;
   /** API key. Defaults to `process.env.ANTHROPIC_API_KEY`. */
   apiKey?: string;
   /** Hard ceiling on the round-trip. Default 6s. */
@@ -73,7 +73,7 @@ export interface ClassifyConvOptions {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_TIMEOUT_MS = 6_000;
 
@@ -118,7 +118,7 @@ const ActionCandidateSchema = z.object({
   suggested_tool: z.string().nullable().optional(),
 });
 
-const HaikuResultSchema = z.object({
+const LlmResultSchema = z.object({
   kind: z.enum([
     "stated-intent",
     "question",
@@ -365,13 +365,13 @@ export async function classifyConv(
   }
 
   try {
-    const parsed = await callHaiku(transcript, {
+    const parsed = await callLlm(transcript, {
       apiKey,
-      fetchImpl: opts.haikuFetch ?? fetch,
+      fetchImpl: opts.llmFetch ?? fetch,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
     const action = parsed.action_candidate
-      ? normalizeHaikuAction(parsed.action_candidate)
+      ? normalizeLlmAction(parsed.action_candidate)
       : undefined;
     return {
       kind: parsed.kind,
@@ -379,27 +379,27 @@ export async function classifyConv(
       action_candidate: action,
       transcript,
       ts: now().toISOString(),
-      source: "haiku",
+      source: "llm",
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return {
       ...ruleResult,
       ts: now().toISOString(),
-      source: "haiku-fallback",
+      source: "llm-fallback",
       fallback_reason: redactReason(reason),
     };
   }
 }
 
-async function callHaiku(
+async function callLlm(
   transcript: string,
   opts: {
     apiKey: string;
     fetchImpl: typeof fetch;
     timeoutMs: number;
   },
-): Promise<z.infer<typeof HaikuResultSchema>> {
+): Promise<z.infer<typeof LlmResultSchema>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
 
@@ -413,7 +413,7 @@ async function callHaiku(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 256,
         system: SYSTEM_PROMPT,
         messages: [{
@@ -424,25 +424,25 @@ async function callHaiku(
     });
 
     if (!res.ok) {
-      throw new Error(`haiku http ${res.status}`);
+      throw new Error(`llm http ${res.status}`);
     }
 
     const body = (await res.json()) as AnthropicMessagesResponse;
     const text = body.content?.find((c) => c.type === "text")?.text ?? "";
     const json = extractJson(text);
-    if (!json) throw new Error("no JSON block in haiku response");
+    if (!json) throw new Error("no JSON block in llm response");
 
-    return HaikuResultSchema.parse(JSON.parse(json));
+    return LlmResultSchema.parse(JSON.parse(json));
   } finally {
     clearTimeout(timer);
   }
 }
 
 /**
- * Normalize the Haiku schema's nullable `suggested_tool` down to our strict
+ * Normalize the LLM schema's nullable `suggested_tool` down to our strict
  * `ActionCandidate` shape (undefined for "no tool").
  */
-function normalizeHaikuAction(a: {
+function normalizeLlmAction(a: {
   verb: string;
   object: string;
   recipients?: string[];
@@ -464,7 +464,7 @@ function extractJson(text: string): string | null {
 }
 
 /**
- * Build the user-message for Haiku classify with sentinel-wrapped
+ * Build the user-message for LLM classify with sentinel-wrapped
  * transcript. Defense-in-depth against prompt injection: a malicious
  * transcript containing "ignore previous instructions" is isolated
  * by a per-call random sentinel that cannot be predicted.

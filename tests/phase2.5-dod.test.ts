@@ -64,7 +64,7 @@ function scriptedFetch(responses: ScriptedResp[]): typeof fetch {
   };
 }
 
-function haikuContent(json: unknown) {
+function llmContent(json: unknown) {
   return { content: [{ type: "text", text: JSON.stringify(json) }] };
 }
 
@@ -193,7 +193,7 @@ class FakeTmuxManager {
 // ─── Test harness ────────────────────────────────────────────────────────────
 
 interface HarnessArgs {
-  haikuResponses: ScriptedResp[];
+  llmResponses: ScriptedResp[];
   briefStore?: BriefStore;
   /** Optional bus so a single bus can be shared across two `execute` runs. */
   bus?: ReturnType<typeof createEventBus>;
@@ -205,10 +205,10 @@ function buildHarness(args: HarnessArgs) {
   const bus = args.bus ?? createEventBus();
   const registry = new AgentRegistry({ dbPath: ":memory:" });
 
-  const fetchImpl = scriptedFetch(args.haikuResponses);
+  const fetchImpl = scriptedFetch(args.llmResponses);
 
   // Wrap the real runResearch so it always uses our scripted fetch + a
-  // bounded timeBudget. This is the "mocked Haiku" layer — the rest of
+  // bounded timeBudget. This is the "mocked LLM" layer — the rest of
   // the research loop runs for real.
   const wrappedRunResearch = (q: string, opts: ResearchOptions = {}) =>
     runResearch(q, {
@@ -288,10 +288,10 @@ describe("Phase 2.5 Definition of Done", () => {
     const briefEvents: AgentEvent[] = [];
 
     const { orch, controller, bus } = buildHarness({
-      haikuResponses: [
-        { body: haikuContent(THREE_HYPOTHESES) },
-        { body: haikuContent(SCORES_SQLITE_WINS) },
-        { body: haikuContent(BRIEF_DRAFT) },
+      llmResponses: [
+        { body: llmContent(THREE_HYPOTHESES) },
+        { body: llmContent(SCORES_SQLITE_WINS) },
+        { body: llmContent(BRIEF_DRAFT) },
       ],
       briefStore,
     });
@@ -397,10 +397,10 @@ describe("Phase 2.5 Definition of Done", () => {
 
     // ── First run: produce + persist a Brief via the real loop.
     const firstRun = buildHarness({
-      haikuResponses: [
-        { body: haikuContent(THREE_HYPOTHESES) },
-        { body: haikuContent(SCORES_SQLITE_WINS) },
-        { body: haikuContent(BRIEF_DRAFT) },
+      llmResponses: [
+        { body: llmContent(THREE_HYPOTHESES) },
+        { body: llmContent(SCORES_SQLITE_WINS) },
+        { body: llmContent(BRIEF_DRAFT) },
       ],
       briefStore,
     });
@@ -423,10 +423,10 @@ describe("Phase 2.5 Definition of Done", () => {
     //    must carry an injected "## Relevant prior research" section
     //    surfaced from the BriefStore.
     const second = buildHarness({
-      haikuResponses: [
-        { body: haikuContent(THREE_HYPOTHESES) },
-        { body: haikuContent(SCORES_SQLITE_WINS) },
-        { body: haikuContent(BRIEF_DRAFT) },
+      llmResponses: [
+        { body: llmContent(THREE_HYPOTHESES) },
+        { body: llmContent(SCORES_SQLITE_WINS) },
+        { body: llmContent(BRIEF_DRAFT) },
       ],
       briefStore,
     });

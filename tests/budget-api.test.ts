@@ -71,7 +71,7 @@ describe("UI /ui/budgets routes", () => {
       tokens_out: 500,
       duration_ms: 1500,
       tool_call: true,
-      model: "haiku",
+      model: "sonnet",
     });
     const { status, body } = await getJson(`${baseUrl}/ui/budgets`);
     assert.equal(status, 200);
@@ -84,7 +84,8 @@ describe("UI /ui/budgets routes", () => {
     assert.equal(rows[0].tokens_out, 500);
     assert.equal(rows[0].tool_calls, 1);
     assert.equal(rows[0].wall_time_ms, 1500);
-    assert.equal(rows[0].cost_usd, 0.0028);
+    // 1000 in @ $3/1M + 500 out @ $15/1M = 0.003 + 0.0075 = 0.0105
+    assert.equal(rows[0].cost_usd, 0.0105);
   });
 
   test("GET /ui/budgets/totals?days=30 returns window totals", async () => {

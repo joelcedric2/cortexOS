@@ -75,7 +75,7 @@ export interface ResearchOptions {
 
 // --------------------------- Defaults --------------------------------------
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const PER_CALL_TIMEOUT_MS = 8_000;
 
@@ -110,7 +110,7 @@ function redactReason(reason: string): string {
   return "unknown";
 }
 
-// --------------------------- Haiku JSON schemas ---------------------------
+// --------------------------- LLM JSON schemas ----------------------------
 
 const HypothesisSeedSchema = z.object({
   h: z.string().min(1),
@@ -207,14 +207,14 @@ interface AnthropicMessagesResponse {
   content?: Array<{ type: string; text?: string }>;
 }
 
-interface HaikuCallDeps {
+interface LlmCallDeps {
   apiKey: string | undefined;
   fetchImpl: typeof fetch;
   outerSignal: AbortSignal;
 }
 
-async function callHaikuJson<T>(
-  deps: HaikuCallDeps,
+async function callLlmJson<T>(
+  deps: LlmCallDeps,
   userPrompt: string,
   schema: z.ZodType<T>,
 ): Promise<T> {
@@ -240,20 +240,20 @@ async function callHaikuJson<T>(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 1024,
         messages: [{ role: "user", content: userPrompt }],
       }),
     });
 
     if (!res.ok) {
-      throw new Error(`haiku http ${res.status}`);
+      throw new Error(`llm http ${res.status}`);
     }
 
     const body = (await res.json()) as AnthropicMessagesResponse;
     const text = body.content?.find((c) => c.type === "text")?.text ?? "";
     const json = extractJson(text);
-    if (!json) throw new Error("no JSON block in haiku response");
+    if (!json) throw new Error("no JSON block in llm response");
     return schema.parse(JSON.parse(json));
   } finally {
     clearTimeout(timer);
@@ -305,7 +305,7 @@ export async function runResearch(
 
   const outer = new AbortController();
   const budgetTimer = setTimeout(() => outer.abort(), timeBudgetMs);
-  const haikuDeps: HaikuCallDeps = {
+  const llmDeps: LlmCallDeps = {
     apiKey,
     fetchImpl,
     outerSignal: outer.signal,
@@ -358,8 +358,8 @@ export async function runResearch(
   try {
     // ----- 1. HYPOTHESIZE -------------------------------------------------
     emit("HYPOTHESIZE", { maxHypotheses });
-    const seeds = await callHaikuJson(
-      haikuDeps,
+    const seeds = await callLlmJson(
+      llmDeps,
       hypothesizePrompt(question, maxHypotheses),
       HypothesisSeedsSchema,
     );
@@ -400,8 +400,8 @@ export async function runResearch(
       probe: h.probe,
       result: h.result ?? "",
     }));
-    const scoreResp = await callHaikuJson(
-      haikuDeps,
+    const scoreResp = await callLlmJson(
+      llmDeps,
       scorePrompt(question, triples),
       ScoresSchema,
     );
@@ -428,8 +428,8 @@ export async function runResearch(
 
     // ----- 4. BRIEF -------------------------------------------------------
     emit("BRIEF");
-    const draft = await callHaikuJson(
-      haikuDeps,
+    const draft = await callLlmJson(
+      llmDeps,
       briefPrompt(question, hypotheses, winner?.h),
       BriefDraftSchema,
     );

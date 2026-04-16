@@ -81,7 +81,7 @@ class FakeAudit {
 
 function scriptedPlanner(
   plans: PlanResponse[],
-): AgentLoopDeps["haikuFetch"] {
+): AgentLoopDeps["planFetch"] {
   let i = 0;
   return async (): Promise<PlanResponse> => {
     if (i >= plans.length) {
@@ -110,7 +110,7 @@ describe("runComputerUse — 3-step happy path → done", () => {
         brief: makeBrief(),
         policy: neverIrreversible(),
         audit,
-        haikuFetch: scriptedPlanner([
+        planFetch: scriptedPlanner([
           {
             plan: "click the text field first",
             action: { kind: "click", x: 10, y: 20 },
@@ -158,7 +158,7 @@ describe("runComputerUse — irreversible action → escalated", () => {
         brief: makeBrief(),
         policy,
         audit,
-        haikuFetch: scriptedPlanner([
+        planFetch: scriptedPlanner([
           {
             plan: "type 'I quit' into the compose window",
             action: { kind: "type", text: "I quit" },
@@ -198,7 +198,7 @@ describe("runComputerUse — budget exhaustion", () => {
           t += 200;
           return t;
         },
-        haikuFetch: scriptedPlanner([
+        planFetch: scriptedPlanner([
           { plan: "n/a", action: { kind: "click", x: 0, y: 0 } },
         ]),
       },
@@ -231,7 +231,7 @@ describe("runComputerUse — maxSteps enforcement", () => {
         capturer,
         brief: makeBrief(),
         policy: neverIrreversible(),
-        haikuFetch: scriptedPlanner(clickForever),
+        planFetch: scriptedPlanner(clickForever),
       },
     );
 
@@ -263,7 +263,7 @@ describe("runComputerUse — planner failure → blocked", () => {
         capturer,
         brief: makeBrief(),
         policy: neverIrreversible(),
-        haikuFetch: async (): Promise<PlanResponse> => {
+        planFetch: async (): Promise<PlanResponse> => {
           throw new Error("llm timeout");
         },
       },
@@ -291,7 +291,7 @@ describe("runComputerUse — deps validation", () => {
             policy: neverIrreversible(),
           },
         ),
-      /haikuFetch/,
+      /planFetch/,
     );
   });
 });

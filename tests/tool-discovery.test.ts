@@ -4,8 +4,8 @@ import { toolDiscovery } from "../src/tools/tool-discovery.js";
 
 // --------------------------- Fixtures -------------------------------------
 
-function makeHaikuFetch(
-  haikuText: string,
+function makeLlmFetch(
+  llmText: string,
   opts: { status?: number; delayMs?: number } = {},
 ): typeof fetch {
   return (async (_input: unknown, init?: RequestInit) => {
@@ -19,7 +19,7 @@ function makeHaikuFetch(
       });
     }
     const body = {
-      content: [{ type: "text", text: haikuText }],
+      content: [{ type: "text", text: llmText }],
     };
     return new Response(JSON.stringify(body), {
       status: opts.status ?? 200,
@@ -54,7 +54,7 @@ describe("toolDiscovery", () => {
   });
 
   test("trims to top 3 sorted by confidence", async () => {
-    const haikuText = JSON.stringify({
+    const llmText = JSON.stringify({
       suggestions: [
         { name: "shell", confidence: 0.95, rationale: "file pattern search" },
         { name: "docs_fetch", confidence: 0.3, rationale: "weak fit" },
@@ -65,7 +65,7 @@ describe("toolDiscovery", () => {
     });
     const out = await toolDiscovery("find a file by pattern", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch(haikuText),
+      fetchImpl: makeLlmFetch(llmText),
       catalog: CATALOG,
     });
     assert.equal(out.length, 3);
@@ -75,40 +75,40 @@ describe("toolDiscovery", () => {
     assert.ok(out[0].confidence > 0.5);
   });
 
-  test("returns [] on Haiku HTTP error", async () => {
+  test("returns [] on LLM HTTP error", async () => {
     const out = await toolDiscovery("anything", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch("", { status: 500 }),
+      fetchImpl: makeLlmFetch("", { status: 500 }),
       catalog: CATALOG,
     });
     assert.deepEqual(out, []);
   });
 
-  test("returns [] on malformed Haiku JSON (zod rejection)", async () => {
-    const haikuText = JSON.stringify({
+  test("returns [] on malformed LLM JSON (zod rejection)", async () => {
+    const llmText = JSON.stringify({
       suggestions: [
         { name: "shell", confidence: "high", rationale: "!" }, // confidence is wrong type
       ],
     });
     const out = await toolDiscovery("anything", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch(haikuText),
+      fetchImpl: makeLlmFetch(llmText),
       catalog: CATALOG,
     });
     assert.deepEqual(out, []);
   });
 
-  test("returns [] when Haiku response has no JSON block", async () => {
+  test("returns [] when LLM response has no JSON block", async () => {
     const out = await toolDiscovery("anything", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch("I cannot help with that."),
+      fetchImpl: makeLlmFetch("I cannot help with that."),
       catalog: CATALOG,
     });
     assert.deepEqual(out, []);
   });
 
   test("drops suggestions pointing at tools not in catalog", async () => {
-    const haikuText = JSON.stringify({
+    const llmText = JSON.stringify({
       suggestions: [
         { name: "shell", confidence: 0.9, rationale: "ok" },
         { name: "hallucinated_tool", confidence: 0.99, rationale: "fake" },
@@ -116,7 +116,7 @@ describe("toolDiscovery", () => {
     });
     const out = await toolDiscovery("find file", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch(haikuText),
+      fetchImpl: makeLlmFetch(llmText),
       catalog: CATALOG,
     });
     assert.equal(out.length, 1);
@@ -127,14 +127,14 @@ describe("toolDiscovery", () => {
     const customCatalog = [
       { name: "my_custom_tool", description: "Does a custom thing." },
     ];
-    const haikuText = JSON.stringify({
+    const llmText = JSON.stringify({
       suggestions: [
         { name: "my_custom_tool", confidence: 0.8, rationale: "fits" },
       ],
     });
     const out = await toolDiscovery("custom thing", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch(haikuText),
+      fetchImpl: makeLlmFetch(llmText),
       catalog: customCatalog,
     });
     assert.equal(out.length, 1);
@@ -142,10 +142,10 @@ describe("toolDiscovery", () => {
     assert.equal(out[0].confidence, 0.8);
   });
 
-  test("aborts on slow Haiku response via timeoutMs", async () => {
+  test("aborts on slow LLM response via timeoutMs", async () => {
     const out = await toolDiscovery("anything", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch("{}", { delayMs: 500 }),
+      fetchImpl: makeLlmFetch("{}", { delayMs: 500 }),
       timeoutMs: 30,
       catalog: CATALOG,
     });
@@ -153,14 +153,14 @@ describe("toolDiscovery", () => {
   });
 
   test("DoD: 'find a file by pattern' suggests shell with confidence > 0.5", async () => {
-    const haikuText = JSON.stringify({
+    const llmText = JSON.stringify({
       suggestions: [
         { name: "shell", confidence: 0.85, rationale: "ls/grep/rg for patterns" },
       ],
     });
     const out = await toolDiscovery("find a file by pattern", {
       apiKey: "k",
-      fetchImpl: makeHaikuFetch(haikuText),
+      fetchImpl: makeLlmFetch(llmText),
       catalog: CATALOG,
     });
     const shell = out.find((s) => s.name === "shell");

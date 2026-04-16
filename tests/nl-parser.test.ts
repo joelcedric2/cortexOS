@@ -1,6 +1,6 @@
 /**
  * Phase 1.5 — Agent B
- * Tests for NL → cron parser (heuristic + Haiku + redaction).
+ * Tests for NL → cron parser (heuristic + LLM + redaction).
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { parseNl } from "../src/scheduler/nl-parser.js";
 
 const TZ = "America/New_York";
 
-// Make sure the ambient API key (if present) doesn't push us onto the Haiku
+// Make sure the ambient API key (if present) doesn't push us onto the LLM
 // path in heuristic tests. Pass empty apiKey explicitly to force heuristic.
 const H = { apiKey: "" };
 
@@ -114,8 +114,8 @@ describe("parseNl — heuristic path (no API key)", () => {
   });
 });
 
-describe("parseNl — Haiku path (mocked fetch)", () => {
-  test("valid Haiku response is passed through", async () => {
+describe("parseNl — LLM path (mocked fetch)", () => {
+  test("valid LLM response is passed through", async () => {
     const fakeFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
@@ -145,7 +145,7 @@ describe("parseNl — Haiku path (mocked fetch)", () => {
     assert.equal(r.rationale, "friday at 5pm");
   });
 
-  test("Haiku 500 error falls back to heuristic with redacted rationale", async () => {
+  test("LLM 500 error falls back to heuristic with redacted rationale", async () => {
     const fakeFetch: typeof fetch = async () =>
       new Response("upstream exploded with secret=abc123", {
         status: 500,
@@ -159,13 +159,13 @@ describe("parseNl — Haiku path (mocked fetch)", () => {
     // Fell back to heuristic
     assert.equal(r.cron_expr, "0 17 * * 5");
     // Rationale is prefixed with redacted reason, no raw body bleed
-    assert.match(r.rationale, /^\[haiku-fallback: (server-error|client-error)\]/);
+    assert.match(r.rationale, /^\[llm-fallback: (server-error|client-error)\]/);
     assert.doesNotMatch(r.rationale, /secret/);
     assert.doesNotMatch(r.rationale, /abc123/);
     assert.doesNotMatch(r.rationale, /exploded/);
   });
 
-  test("Haiku malformed JSON falls back with parse-error tag", async () => {
+  test("LLM malformed JSON falls back with parse-error tag", async () => {
     const fakeFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
@@ -179,12 +179,12 @@ describe("parseNl — Haiku path (mocked fetch)", () => {
       fetchImpl: fakeFetch,
     });
     assert.equal(r.cron_expr, "0 * * * *");
-    assert.match(r.rationale, /haiku-fallback/);
+    assert.match(r.rationale, /llm-fallback/);
     // No raw error string leakage
     assert.doesNotMatch(r.rationale, /not json at all/);
   });
 
-  test("Haiku timeout falls back cleanly", async () => {
+  test("LLM timeout falls back cleanly", async () => {
     const fakeFetch: typeof fetch = async () => {
       // Throw an abort-like error
       throw new Error("operation was aborted by timeout");
@@ -196,6 +196,6 @@ describe("parseNl — Haiku path (mocked fetch)", () => {
       timeoutMs: 50,
     });
     assert.equal(r.cron_expr, "0 * * * *");
-    assert.match(r.rationale, /\[haiku-fallback: timeout\]/);
+    assert.match(r.rationale, /\[llm-fallback: timeout\]/);
   });
 });

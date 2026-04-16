@@ -83,7 +83,7 @@ export interface NchindaLookDeps {
    */
   ocr?: (imagePath: string) => Promise<{ text: string }>;
   /** Override `fetch` for Sonnet calls. Defaults to the global. */
-  haikuFetch?: typeof fetch;
+  llmFetch?: typeof fetch;
   /** ANTHROPIC_API_KEY override. Defaults to process.env. */
   apiKey?: string;
   /** Timeout for the Sonnet round-trip. Default 10s per spec. */
@@ -119,7 +119,7 @@ const SYSTEM_PROMPT_CLIP =
   "specific question, answer it. Keep the reply to one short paragraph " +
   "(2-4 sentences, max 80 words). Never mention that you are an AI.";
 
-// ─── Redaction (shared pattern with haiku-classifier) ──────────────────────
+// ─── Redaction (shared pattern with sonnet-classifier) ─────────────────────
 
 const SAFE_REASON_PATTERNS: ReadonlyArray<{ match: RegExp; label: string }> = [
   { match: /abort|timeout|deadline/i, label: "timeout" },
@@ -269,7 +269,7 @@ async function describeWithSonnetSingle(
   deps: NchindaLookDeps,
 ): Promise<string> {
   const apiKey = deps.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  const fetchImpl = deps.haikuFetch ?? fetch;
+  const fetchImpl = deps.llmFetch ?? fetch;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!apiKey) {
@@ -358,7 +358,7 @@ async function describeWithSonnetClip(
   deps: NchindaLookDeps,
 ): Promise<string> {
   const apiKey = deps.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  const fetchImpl = deps.haikuFetch ?? fetch;
+  const fetchImpl = deps.llmFetch ?? fetch;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!apiKey) {

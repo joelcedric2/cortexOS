@@ -1,20 +1,20 @@
 /**
  * Natural-language → cron expression parser.
  *
- * Two-tier strategy mirroring `src/classifier/haiku-classifier.ts`:
+ * Two-tier strategy mirroring `src/classifier/sonnet-classifier.ts`:
  *
- *   1. Haiku path — Anthropic Messages API, zod-validated, redacted errors.
+ *   1. LLM path — Anthropic Messages API, zod-validated, redacted errors.
  *   2. Heuristic path — 12 hand-rolled phrasing matchers. Used when no API
- *      key is set OR when Haiku errors out (so the cron scheduler never
+ *      key is set OR when the LLM errors out (so the cron scheduler never
  *      blocks on a flaky LLM).
  *
  * The API key is read from `opts.apiKey` or `process.env.ANTHROPIC_API_KEY`.
  * No secret is ever written to disk or logged; error text is passed through
- * `redactHaikuReason()` before landing in `rationale`.
+ * `redactLlmReason()` before landing in `rationale`.
  */
 import { z } from "zod";
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_TZ = "America/New_York";
@@ -48,7 +48,7 @@ const SAFE_REASON_PATTERNS: ReadonlyArray<{ match: RegExp; label: string }> = [
   { match: /econn|enotfound|network|fetch/i, label: "network" },
 ];
 
-function redactHaikuReason(reason: string): string {
+function redactLlmReason(reason: string): string {
   for (const { match, label } of SAFE_REASON_PATTERNS) {
     if (match.test(reason)) return label;
   }
@@ -57,7 +57,7 @@ function redactHaikuReason(reason: string): string {
 
 // --------------------------- Schema ---------------------------------------
 
-const HaikuResultSchema = z.object({
+const LlmResultSchema = z.object({
   cron_expr: z.string().min(3),
   timezone: z.string().min(1).optional(),
   confidence: z.number().min(0).max(1),
@@ -90,7 +90,7 @@ export async function parseNl(
   }
 
   try {
-    return await callHaiku(utterance, tz, {
+    return await callLlm(utterance, tz, {
       apiKey,
       fetchImpl: opts.fetchImpl ?? fetch,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -100,23 +100,23 @@ export async function parseNl(
     const fallback = heuristicParse(utterance, tz);
     return {
       ...fallback,
-      rationale: `[haiku-fallback: ${redactHaikuReason(reason)}] ${fallback.rationale}`,
+      rationale: `[llm-fallback: ${redactLlmReason(reason)}] ${fallback.rationale}`,
     };
   }
 }
 
-// --------------------------- Haiku path -----------------------------------
+// --------------------------- LLM path ------------------------------------
 
-interface HaikuDeps {
+interface LlmDeps {
   apiKey: string;
   fetchImpl: typeof fetch;
   timeoutMs: number;
 }
 
-async function callHaiku(
+async function callLlm(
   utterance: string,
   tz: string,
-  deps: HaikuDeps,
+  deps: LlmDeps,
 ): Promise<CronParseResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs);
@@ -131,7 +131,7 @@ async function callHaiku(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 256,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: `Utterance: ${utterance}\nDefault timezone: ${tz}` }],
@@ -139,15 +139,15 @@ async function callHaiku(
     });
 
     if (!res.ok) {
-      throw new Error(`haiku http ${res.status}`);
+      throw new Error(`llm http ${res.status}`);
     }
 
     const body = (await res.json()) as AnthropicMessagesResponse;
     const text = body.content?.find((c) => c.type === "text")?.text ?? "";
     const json = extractJson(text);
-    if (!json) throw new Error("no JSON block in haiku response");
+    if (!json) throw new Error("no JSON block in llm response");
 
-    const parsed = HaikuResultSchema.parse(JSON.parse(json));
+    const parsed = LlmResultSchema.parse(JSON.parse(json));
     return {
       cron_expr: parsed.cron_expr,
       timezone: parsed.timezone ?? tz,

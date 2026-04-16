@@ -5,7 +5,7 @@
  * Two modes:
  *   - `local-only` (default): heuristics over OCR + active-app/window title.
  *       Never makes a network call. Grep `ANTHROPIC_URL` confirms.
- *   - `llm`: adds a single Claude Haiku vision-capable call to polish the
+ *   - `llm`: adds a single Claude Sonnet vision-capable call to polish the
  *       summary + refine sentiment. Falls back to local-only on any failure
  *       (network, timeout, schema mismatch) so the caller never blocks.
  *
@@ -61,7 +61,7 @@ export interface VisionBriefOptions {
   /**
    * Phase 8.5 — optional audit sink. When provided AND the LLM path fires,
    * one NDJSON line is appended:
-   *   {action: 'vision_llm', detail: 'model=haiku outcome=<ok|error>', ts}
+   *   {action: 'vision_llm', detail: 'model=sonnet outcome=<ok|error>', ts}
    * No-op when omitted, keeping callers that don't care opt-out.
    */
   audit?: AuditLog;
@@ -75,7 +75,7 @@ export interface VisionBriefDeps {
 
 const VISIBLE_TEXT_CAP = 4_000;
 const DEFAULT_TIMEOUT_MS = 8_000;
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
 /**
@@ -151,7 +151,7 @@ const COMPOSER_TITLE_PATTERNS = [
 ];
 
 /**
- * Error-reason redaction (same pattern as haiku-classifier.ts). Never leaks
+ * Error-reason redaction (same pattern as sonnet-classifier.ts). Never leaks
  * raw error text into the returned summary.
  */
 const SAFE_REASON_PATTERNS: ReadonlyArray<{ match: RegExp; label: string }> = [
@@ -216,7 +216,7 @@ export async function buildBrief(
     return local;
   }
 
-  // llm mode: polish summary + sentiment via Haiku. Fall back to local on any
+  // llm mode: polish summary + sentiment via Sonnet. Fall back to local on any
   // failure. Private apps never reach this path (guarded above).
   const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -227,7 +227,7 @@ export async function buildBrief(
   }
 
   try {
-    const polished = await callHaikuVision(
+    const polished = await callLlmVision(
       frame,
       visibleText,
       apiKey,
@@ -261,7 +261,7 @@ function appendVisionLlmAudit(
 ): void {
   if (!audit) return;
   try {
-    const parts = [`model=haiku`, `outcome=${outcome}`];
+    const parts = [`model=sonnet`, `outcome=${outcome}`];
     if (errorLabel) parts.push(`reason=${errorLabel}`);
     audit.append({
       action: "vision_llm",
@@ -411,7 +411,7 @@ function truncate(s: string, cap: number): string {
 
 // --------------------------- LLM path -------------------------------------
 
-async function callHaikuVision(
+async function callLlmVision(
   frame: ScreenFrame,
   visibleText: string,
   apiKey: string,
@@ -431,7 +431,7 @@ async function callHaikuVision(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 200,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: prompt }],
@@ -439,13 +439,13 @@ async function callHaikuVision(
     });
 
     if (!res.ok) {
-      throw new Error(`haiku http ${res.status}`);
+      throw new Error(`llm http ${res.status}`);
     }
 
     const body = (await res.json()) as AnthropicMessagesResponse;
     const text = body.content?.find((c) => c.type === "text")?.text ?? "";
     const json = extractJson(text);
-    if (!json) throw new Error("no JSON block in haiku response");
+    if (!json) throw new Error("no JSON block in llm response");
 
     return LlmBriefSchema.parse(JSON.parse(json));
   } finally {

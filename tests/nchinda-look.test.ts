@@ -73,7 +73,7 @@ describe("nchinda_look — happy path", () => {
       };
 
       let sonnetBody: any;
-      const haikuFetch: typeof fetch = async (_url, init) => {
+      const llmFetch: typeof fetch = async (_url, init) => {
         sonnetBody = JSON.parse((init?.body ?? "{}") as string);
         return new Response(
           JSON.stringify({
@@ -90,7 +90,7 @@ describe("nchinda_look — happy path", () => {
 
       const result = await nchindaLook(
         { question: "what am I looking at", device: "continuity", mode: "still" },
-        { capture, ocr, haikuFetch, apiKey: "test-key" },
+        { capture, ocr, llmFetch, apiKey: "test-key" },
       );
 
       assert.equal(capture.calls(), 1);
@@ -120,7 +120,7 @@ describe("nchinda_look — happy path", () => {
       }) as any;
 
       const ocr = async () => ({ text: "" });
-      const haikuFetch: typeof fetch = async () =>
+      const llmFetch: typeof fetch = async () =>
         new Response(
           JSON.stringify({ content: [{ type: "text", text: "A kitchen scene." }] }),
           { status: 200 },
@@ -128,7 +128,7 @@ describe("nchinda_look — happy path", () => {
 
       await nchindaLook(
         { device: "back", mode: "still" },
-        { capture, ocr, haikuFetch, apiKey: "k" },
+        { capture, ocr, llmFetch, apiKey: "k" },
       );
       assert.equal(sawDevice, "back");
     });
@@ -144,7 +144,7 @@ describe("nchinda_look — LLM fallback", () => {
       const capture = fakeCapture(makeFrame({ jpeg_path: jpeg }));
       const ocr = async () => ({ text: "Boarding Pass LAX → JFK" });
       let fetchCalled = false;
-      const haikuFetch: typeof fetch = async () => {
+      const llmFetch: typeof fetch = async () => {
         fetchCalled = true;
         return new Response("{}", { status: 200 });
       };
@@ -155,7 +155,7 @@ describe("nchinda_look — LLM fallback", () => {
       try {
         const result = await nchindaLook(
           { question: "where am I flying", mode: "still" },
-          { capture, ocr, haikuFetch },
+          { capture, ocr, llmFetch },
         );
         assert.equal(fetchCalled, false, "no fetch when no api key");
         assert.match(result.description, /no-api-key/);
@@ -172,12 +172,12 @@ describe("nchinda_look — LLM fallback", () => {
       const jpeg = jpegOnDisk(dir);
       const capture = fakeCapture(makeFrame({ jpeg_path: jpeg }));
       const ocr = async () => ({ text: "hello" });
-      const haikuFetch: typeof fetch = async () =>
+      const llmFetch: typeof fetch = async () =>
         new Response("boom", { status: 500 });
 
       const result = await nchindaLook(
         { question: "hi", mode: "still" },
-        { capture, ocr, haikuFetch, apiKey: "key" },
+        { capture, ocr, llmFetch, apiKey: "key" },
       );
       assert.match(result.description, /Local-only reply/);
       assert.match(result.description, /http-500/);
@@ -189,13 +189,13 @@ describe("nchinda_look — LLM fallback", () => {
       const jpeg = jpegOnDisk(dir);
       const capture = fakeCapture(makeFrame({ jpeg_path: jpeg }));
       const ocr = async () => ({ text: "" });
-      const haikuFetch: typeof fetch = async () => {
+      const llmFetch: typeof fetch = async () => {
         throw new Error("ECONNRESET");
       };
 
       const result = await nchindaLook(
         { mode: "still" },
-        { capture, ocr, haikuFetch, apiKey: "key" },
+        { capture, ocr, llmFetch, apiKey: "key" },
       );
       assert.match(result.description, /Local-only reply/);
       assert.match(result.description, /network/);
@@ -208,11 +208,11 @@ describe("nchinda_look — LLM fallback", () => {
       makeFrame({ jpeg_path: "/tmp/does-not-exist-9871263.jpg" }),
     );
     const ocr = async () => ({ text: "" });
-    const haikuFetch: typeof fetch = async () => new Response("{}", { status: 200 });
+    const llmFetch: typeof fetch = async () => new Response("{}", { status: 200 });
 
     const result = await nchindaLook(
       { mode: "still" },
-      { capture, ocr, haikuFetch, apiKey: "key" },
+      { capture, ocr, llmFetch, apiKey: "key" },
     );
     assert.match(result.description, /Local-only reply/);
     assert.match(result.description, /read-failed/);

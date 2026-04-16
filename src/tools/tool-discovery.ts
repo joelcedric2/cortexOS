@@ -1,12 +1,12 @@
 /**
  * Meta-tool `tool_discovery` (plan §5.1).
  *
- * Given a natural-language `need`, ask Claude Haiku to pick the top 3 tools
+ * Given a natural-language `need`, ask Claude Sonnet to pick the top 3 tools
  * from our catalog. Catalog defaults to `NCHINDA_TOOL_SCHEMAS` (we map each
  * schema to a `{name, description}` pair) but can be overridden for tests
  * or alternative registries.
  *
- * Mirrors the HaikuClassifier's fetch path deliberately: same 8s timeout,
+ * Mirrors the LlmClassifier's fetch path deliberately: same 8s timeout,
  * same AbortController wiring, same whitelist-based error redaction. All
  * failures resolve to `[]` with a redacted warn — this is a hint surface,
  * not a critical path, and we never want to block a caller on a flaky LLM.
@@ -19,7 +19,7 @@ import { NCHINDA_TOOL_SCHEMAS } from "../mcp/tool-schema.js";
 
 // --------------------------- Constants ------------------------------------
 
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const LLM_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_SUGGESTIONS = 3;
@@ -77,7 +77,7 @@ interface AnthropicMessagesResponse {
 // --------------------------- Public API -----------------------------------
 
 /**
- * Ask Haiku which tools from our catalog best satisfy `need`.
+ * Ask the LLM which tools from our catalog best satisfy `need`.
  *
  * Returns the top 3 suggestions sorted by confidence descending. Always
  * resolves; on any error (no API key, network, timeout, malformed JSON,
@@ -108,7 +108,7 @@ export async function toolDiscovery(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   try {
-    const suggestions = await callHaiku({
+    const suggestions = await callLlm({
       need,
       catalog,
       apiKey,
@@ -121,14 +121,14 @@ export async function toolDiscovery(
       .slice(0, MAX_SUGGESTIONS);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    console.warn(`[tool_discovery] haiku failed: ${redactReason(reason)}`);
+    console.warn(`[tool_discovery] llm failed: ${redactReason(reason)}`);
     return [];
   }
 }
 
-// --------------------------- Haiku call -----------------------------------
+// --------------------------- LLM call ------------------------------------
 
-async function callHaiku(args: {
+async function callLlm(args: {
   need: string;
   catalog: Array<{ name: string; description: string }>;
   apiKey: string;
@@ -152,7 +152,7 @@ async function callHaiku(args: {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: HAIKU_MODEL,
+        model: LLM_MODEL,
         max_tokens: 512,
         system:
           "You recommend tools from a fixed catalog. Return ONLY valid JSON " +
@@ -164,13 +164,13 @@ async function callHaiku(args: {
     });
 
     if (!res.ok) {
-      throw new Error(`haiku http ${res.status}`);
+      throw new Error(`llm http ${res.status}`);
     }
 
     const body = (await res.json()) as AnthropicMessagesResponse;
     const text = body.content?.find((c) => c.type === "text")?.text ?? "";
     const json = extractJson(text);
-    if (!json) throw new Error("no JSON block in haiku response");
+    if (!json) throw new Error("no JSON block in llm response");
 
     const parsed = ResponseSchema.parse(JSON.parse(json));
 
@@ -197,7 +197,7 @@ function buildPrompt(
   );
 }
 
-/** Pull the first JSON object out of a Haiku text response. */
+/** Pull the first JSON object out of an LLM text response. */
 function extractJson(text: string): string | null {
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) return trimmed;

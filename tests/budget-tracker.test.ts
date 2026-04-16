@@ -45,7 +45,7 @@ describe("BudgetTracker", () => {
       tokens_out: 500,
       duration_ms: 1234,
       tool_call: true,
-      model: "haiku",
+      model: "sonnet",
     });
     const snap = tracker.snapshot("A1");
     assert.ok(snap, "snapshot should exist");
@@ -55,8 +55,8 @@ describe("BudgetTracker", () => {
     assert.equal(snap!.tokens_out, 500);
     assert.equal(snap!.wall_time_ms, 1234);
     assert.equal(snap!.tool_calls, 1);
-    // 1000 in @ $0.80/1M + 500 out @ $4/1M = 0.0008 + 0.002 = 0.0028
-    assert.equal(snap!.cost_usd, 0.0028);
+    // 1000 in @ $3/1M + 500 out @ $15/1M = 0.003 + 0.0075 = 0.0105
+    assert.equal(snap!.cost_usd, 0.0105);
   });
 
   test("snapshot returns null for unknown agent", () => {
@@ -94,8 +94,6 @@ describe("BudgetTracker", () => {
   });
 
   test("cost computation is model-aware", () => {
-    assert.equal(costForDelta(1_000_000, 0, "haiku"), MODEL_PRICES_PER_1M.haiku.in);
-    assert.equal(costForDelta(0, 1_000_000, "haiku"), MODEL_PRICES_PER_1M.haiku.out);
     assert.equal(costForDelta(1_000_000, 0, "sonnet"), MODEL_PRICES_PER_1M.sonnet.in);
     assert.equal(costForDelta(0, 1_000_000, "sonnet"), MODEL_PRICES_PER_1M.sonnet.out);
     assert.equal(costForDelta(1_000_000, 0, "opus"), MODEL_PRICES_PER_1M.opus.in);
@@ -103,9 +101,9 @@ describe("BudgetTracker", () => {
   });
 
   test("listActive returns most-recently-updated first", () => {
-    tracker.record({ agentId: "older", role: "coder", tokens_in: 1, model: "haiku" });
+    tracker.record({ agentId: "older", role: "coder", tokens_in: 1, model: "sonnet" });
     clock += 5_000;
-    tracker.record({ agentId: "newer", role: "coder", tokens_in: 1, model: "haiku" });
+    tracker.record({ agentId: "newer", role: "coder", tokens_in: 1, model: "sonnet" });
     const list = tracker.listActive();
     assert.equal(list.length, 2);
     assert.equal(list[0].agentId, "newer");
@@ -119,20 +117,21 @@ describe("BudgetTracker", () => {
 
     // Recent row, updated today
     clock = Date.parse("2026-04-15T12:00:00.000Z");
-    tracker.record({ agentId: "fresh", role: "coder", tokens_in: 1000, tokens_out: 500, model: "haiku" });
+    tracker.record({ agentId: "fresh", role: "coder", tokens_in: 1000, tokens_out: 500, model: "sonnet" });
 
     const last3 = tracker.totalsInWindow(3);
     assert.equal(last3.tokens_in, 1000);
     assert.equal(last3.tokens_out, 500);
-    assert.equal(last3.cost_usd, 0.0028);
+    // 1000 in @ $3/1M + 500 out @ $15/1M = 0.003 + 0.0075 = 0.0105
+    assert.equal(last3.cost_usd, 0.0105);
 
     const last30 = tracker.totalsInWindow(30);
     assert.equal(last30.tokens_in, 1999);
     assert.equal(last30.tokens_out, 1499);
-    // Old row: 999 @ $15/1M in + 999 @ $75/1M out = 0.00001499 + 0.000074925 ≈ 0.089915 (wait: 999/1M = 0.000999)
-    // 0.000999 * 15 = 0.014985; 0.000999 * 75 = 0.074925; total = 0.08991
-    // + fresh 0.0028 = 0.09271
-    assert.ok(Math.abs(last30.cost_usd - 0.09271) < 1e-5, `unexpected cost ${last30.cost_usd}`);
+    // Old row (opus): 999 in @ $15/1M + 999 out @ $75/1M = 0.014985 + 0.074925 = 0.08991
+    // Fresh row (sonnet): 0.0105
+    // Total = 0.10041
+    assert.ok(Math.abs(last30.cost_usd - 0.10041) < 1e-5, `unexpected cost ${last30.cost_usd}`);
   });
 
   test("record without a model still accumulates tokens at zero cost", () => {

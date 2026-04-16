@@ -6,7 +6,7 @@
  * dependency triple and get a production-shaped loop back.
  *
  * Intent classifier wiring: we use `createClassifier({ mode: 'auto' })` from
- * `src/classifier/index.ts` so the loop gets Haiku when `ANTHROPIC_API_KEY`
+ * `src/classifier/index.ts` so the loop gets Sonnet when `ANTHROPIC_API_KEY`
  * is set and the deterministic heuristic classifier otherwise — matching
  * the plan §2 "classifier-first" routing.
  *
@@ -53,10 +53,10 @@ export interface CreateAutonomyLoopOptions {
 
   /**
    * Explicit classifier mode override. When `classifier` is also supplied
-   * this is ignored. Defaults to `"auto"` — Haiku if ANTHROPIC_API_KEY is
+   * this is ignored. Defaults to `"auto"` — Sonnet if ANTHROPIC_API_KEY is
    * present, else the heuristic classifier.
    */
-  classifierMode?: "auto" | "haiku" | "heuristic";
+  classifierMode?: "auto" | "llm" | "heuristic";
 }
 
 /**

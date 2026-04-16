@@ -15,7 +15,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-export type BudgetModel = "haiku" | "sonnet" | "opus";
+export type BudgetModel = "sonnet" | "opus";
 
 export interface AgentBudget {
   agentId: string;
@@ -49,7 +49,6 @@ export interface BudgetWindowTotals {
  * (Pinned 2025 schedule — revisit when pricing changes.)
  */
 export const MODEL_PRICES_PER_1M: Record<BudgetModel, { in: number; out: number }> = {
-  haiku: { in: 0.8, out: 4 },
   sonnet: { in: 3, out: 15 },
   opus: { in: 15, out: 75 },
 };

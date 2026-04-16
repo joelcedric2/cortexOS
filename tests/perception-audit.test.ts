@@ -320,7 +320,7 @@ describe("vision-brief audit plumbing", () => {
     const lines = readLines(auditPath);
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, "vision_llm");
-    assert.match(lines[0].detail, /model=haiku/);
+    assert.match(lines[0].detail, /model=sonnet/);
     assert.match(lines[0].detail, /outcome=ok/);
   });
 
