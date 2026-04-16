@@ -138,6 +138,18 @@ async function dispatch(name, args, tools) {
       if (name === "skill_create") return await st.create(args);
       return await st.use(args);
     }
+    case "social_send":
+    case "social_post": {
+      const { SocialTools } = await import("../../dist/mcp/social-tools.js");
+      const { SocialDB } = await import("../../dist/social/social-db.js");
+      const { createEventBus } = await import("../../dist/ipc/event-bus.js");
+      const socialDb = new SocialDB();
+      const eventBus = runtime.eventBus ?? createEventBus();
+      const drivers = runtime.socialDrivers ?? new Map();
+      const st = new SocialTools({ drivers, socialDb, eventBus });
+      if (name === "social_send") return await st.send(args);
+      return st.post(args);
+    }
     default: {
       const err = new Error(`unknown tool: ${name}`);
       err.isUnknownTool = true;

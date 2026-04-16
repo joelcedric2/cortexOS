@@ -521,6 +521,67 @@ export const CDP_WAIT_FOR_SCHEMA: McpToolSchema = {
   },
 };
 
+export const SOCIAL_SEND_SCHEMA: McpToolSchema = {
+  name: "social_send",
+  description:
+    "Send a direct message on a social platform. Picks the right driver (IG/X/LinkedIn/etc.), runs the universal flow (login check → resolve target → open conversation → type message → escalation confirmation). Always triggers human confirmation before final send.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      platform: {
+        type: "string",
+        enum: [
+          "ig", "x", "linkedin", "reddit", "tiktok",
+          "discord", "telegram", "whatsapp", "imessage",
+        ],
+        description: "Target social platform.",
+      },
+      target: {
+        type: "string",
+        description:
+          "Handle or display name of the recipient (e.g. '@jobed', '+15551234567').",
+        minLength: 1,
+        maxLength: 256,
+      },
+      message: {
+        type: "string",
+        description: "The message to send. Max 4000 chars.",
+        minLength: 1,
+        maxLength: 4000,
+      },
+    },
+    required: ["platform", "target", "message"],
+    additionalProperties: false,
+  },
+};
+
+export const SOCIAL_POST_SCHEMA: McpToolSchema = {
+  name: "social_post",
+  description:
+    "Publish content on a social platform. NOT YET IMPLEMENTED — ships in Phase 5. Always throws.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      platform: {
+        type: "string",
+        enum: [
+          "ig", "x", "linkedin", "reddit", "tiktok",
+          "discord", "telegram", "whatsapp", "imessage",
+        ],
+        description: "Target social platform.",
+      },
+      content: {
+        type: "string",
+        description: "The content to publish.",
+        minLength: 1,
+        maxLength: 10000,
+      },
+    },
+    required: ["platform", "content"],
+    additionalProperties: false,
+  },
+};
+
 /** Canonical list used by the stdio server at registration time. */
 export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   NCHINDA_RECALL_SCHEMA,
@@ -544,4 +605,6 @@ export const NCHINDA_TOOL_SCHEMAS: McpToolSchema[] = [
   CDP_READ_TEXT_SCHEMA,
   CDP_SCREENSHOT_SCHEMA,
   CDP_WAIT_FOR_SCHEMA,
+  SOCIAL_SEND_SCHEMA,
+  SOCIAL_POST_SCHEMA,
 ];
