@@ -108,18 +108,19 @@ export class CoachSurface {
     const isImportant = suggestion.severity === "important";
     const userIdle = this.voiceIdle ? this.voiceIdle.isIdle() : true;
 
-    // Record dedup marker eagerly: if we decide to route in any meaningful
-    // way, we must suppress immediate re-routes of the same draft text.
-    this.lastRouted.set(dedupKey, now);
-
     // Whisper path: important severity + user idle + TTS available.
     if (isImportant && userIdle && this.tts) {
       try {
         await this.tts.speak(buildWhisper(suggestion));
+        // Dedup only after a SUCCESSFUL whisper — if TTS throws, the
+        // retry path must still be able to surface the suggestion.
+        this.lastRouted.set(dedupKey, now);
         this.auditLine("surface", `coach-whisper app=${sample.app} severity=important`);
         return "whispered";
       } catch {
         // TTS failure is non-fatal — fall through to pending-surface.
+        // Crucially, we do NOT set the dedup key here so the retry
+        // can attempt the surface path within the same window.
       }
     }
 
@@ -136,6 +137,8 @@ export class CoachSurface {
         },
         sampledAt: new Date(now),
       });
+      // Dedup after successful surface insert.
+      this.lastRouted.set(dedupKey, now);
       this.auditLine(
         "surface",
         `coach-surface app=${sample.app} severity=${suggestion.severity}`,
@@ -143,7 +146,9 @@ export class CoachSurface {
       return "surfaced";
     }
 
-    // Otherwise audit-only.
+    // Otherwise audit-only — still set dedup so we don't spam the
+    // audit log with the same suggestion.
+    this.lastRouted.set(dedupKey, now);
     this.auditLine(
       "sensor_sample",
       `coach-audit app=${sample.app} severity=${suggestion.severity}`,

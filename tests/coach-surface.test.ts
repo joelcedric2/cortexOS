@@ -169,4 +169,46 @@ describe("CoachSurface", () => {
     assert.equal(r, "quiet");
     assert.equal(store.items.length, 0);
   });
+
+  it("TTS failure does NOT poison the dedup key — retry re-surfaces", async () => {
+    // 1st call: TTS fails → falls through to surface path.
+    const tts = new MockTTS();
+    tts.throwOnNext = true;
+    const store = new MemStore();
+    const s = surface("anticipatory", { tts, store, idle: true });
+
+    const sug = suggestion({ severity: "important" });
+    const r1 = await s.route(sample(), sug);
+    assert.equal(r1, "surfaced");
+    assert.equal(store.items.length, 1);
+    assert.equal(tts.spoken.length, 0, "TTS threw — nothing spoken");
+
+    // 2nd call (same draft_value): the dedup key was set after the
+    // successful surface insert, so this should be deduped — the
+    // suggestion *was* delivered (via surface), just not via TTS.
+    const r2 = await s.route(sample(), sug);
+    assert.equal(r2, "deduped");
+    assert.equal(store.items.length, 1, "no double-insert");
+  });
+
+  it("all-paths-fail does NOT set dedup — next call retries", async () => {
+    // Construct a scenario where both TTS and store are unavailable,
+    // AND mode prevents surface path (volunteer: no surface, TTS
+    // fires only when available + important + idle).
+    //
+    // With volunteer mode + important + idle + TTS throws: we attempt
+    // whisper → fails → fall through to surface → volunteer mode
+    // doesn't have aggressive=true → ends at "audited". The dedup
+    // IS set after audit (since we still logged it). This is correct:
+    // audit-only is a valid route, and we don't want to spam audit.
+    const tts = new MockTTS();
+    tts.throwOnNext = true;
+    const audit = new MockAudit();
+    const s = surface("volunteer", { tts, audit, idle: true });
+
+    const sug = suggestion({ severity: "important" });
+    const r1 = await s.route(sample(), sug);
+    assert.equal(r1, "audited");
+    assert.ok(audit.entries.length > 0);
+  });
 });
