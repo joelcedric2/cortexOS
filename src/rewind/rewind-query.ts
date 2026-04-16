@@ -72,6 +72,14 @@ const MAX_LIMIT = 50;
 const OVER_FETCH_MULTIPLIER = 3;
 const EXCERPT_LEN = 300;
 
+/** Policy-tunable defaults per §7.0. */
+export const REWIND_DEFAULTS = Object.freeze({
+  /** Maximum decompressed OCR text per row. 1 MB >> any realistic screen. */
+  maxOcrBytes: 1_000_000,
+});
+
+const TRUNCATED_MARKER = " [truncated]";
+
 /**
  * Search the screen-memories store with a natural-language query.
  *
@@ -229,7 +237,15 @@ function safeExcerpt(
   if (!row.ocr_text_zstd) return null;
   let full: string;
   try {
-    full = zstdDecompressSync(row.ocr_text_zstd).toString("utf8");
+    const buf = zstdDecompressSync(row.ocr_text_zstd, {
+      maxOutputLength: REWIND_DEFAULTS.maxOcrBytes,
+    });
+    full = buf.toString("utf8");
+    if (buf.byteLength >= REWIND_DEFAULTS.maxOcrBytes) {
+      // Blob decompressed to exactly the cap — likely truncated.
+      full = full.slice(0, full.length - TRUNCATED_MARKER.length) +
+        TRUNCATED_MARKER;
+    }
   } catch (err) {
     warn(err, row.id);
     return null;

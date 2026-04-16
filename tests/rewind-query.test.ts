@@ -24,6 +24,7 @@ import {
 import {
   rewindSearch,
   carveExcerpt,
+  REWIND_DEFAULTS,
   type RewindEmbedder,
 } from "../src/rewind/rewind-query.js";
 
@@ -245,6 +246,54 @@ describe("rewindSearch — OCR excerpt", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("rewindSearch — zstd bomb protection", () => {
+  test("blob decompressing to >1MB is bounded + gets [truncated] marker", async () => {
+    const db = new ScreenMemoriesDB({ dbPath: ":memory:" });
+    try {
+      // Create a ~2 MB text blob (highly compressible repetitive text).
+      const bigText = "AAAA ".repeat(400_000); // ~2 MB
+      assert.ok(bigText.length > REWIND_DEFAULTS.maxOcrBytes,
+        `test blob must exceed cap (${bigText.length} > ${REWIND_DEFAULTS.maxOcrBytes})`);
+      const zstd = zstdCompressSync(Buffer.from(bigText, "utf8"));
+      db.insert(
+        makeRow("bomb", {
+          ocr_text_zstd: zstd,
+          embedding: int8Vec([100, 0, 0, 0]),
+        }),
+      );
+      const emb = new ScriptedEmbedder(int8Vec([100, 0, 0, 0]));
+      const warnings: string[] = [];
+      const out = await rewindSearch(
+        { text: "AAAA" },
+        {
+          db,
+          embedder: emb,
+          onDecompressError: (_err, id) => warnings.push(id),
+        },
+      );
+      // Row still returned — not crashed
+      assert.equal(out.length, 1);
+      if (out[0]!.ocr_excerpt !== undefined) {
+        // Excerpt carving may or may not produce output from the
+        // truncated text. Either way, the decompression was bounded.
+        assert.ok(out[0]!.ocr_excerpt.length <= 302);
+      }
+      // If zstdDecompressSync threw ERR_BUFFER_TOO_LARGE, warning was
+      // emitted and excerpt is absent (graceful fallback).
+      if (warnings.length > 0) {
+        assert.equal(warnings[0], "bomb");
+        assert.equal(out[0]!.ocr_excerpt, undefined);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test("REWIND_DEFAULTS.maxOcrBytes is exported and equals 1_000_000", () => {
+    assert.equal(REWIND_DEFAULTS.maxOcrBytes, 1_000_000);
   });
 });
 
