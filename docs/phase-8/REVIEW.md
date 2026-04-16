@@ -454,4 +454,99 @@ Target LOC: ~200 + ~300 tests.
 
 ---
 
-_Author: Tester 2 (independent reviewer, read-only)._
+## 10. Addendum — State update at commit `ea9674c`
+
+Between commits #2 (verdict BLOCK) and #5, coders landed substantial new work on
+`phase8-11/integration`. Re-scanning at HEAD = `ea9674c`:
+
+**Now landed:**
+- `src/perception/screen-capture.ts` (292 LOC) — `ScreenCapturer` with ring
+  buffer, `DEFAULT_PRIVATE_APPS` (1Password, Safari-bank, Keychain, etc.),
+  `forceOff()` kill-switch, `purge(olderThanSec?)`, idempotent start/stop.
+- `src/perception/ocr.ts` (131 LOC) — TS `ocrImage()` wrapper over the Swift helper.
+- `src/perception/vision-brief.ts` (438 LOC) — `buildBrief()` with local-only
+  default + Haiku llm mode, `PRIVATE_APPS` deny-list enforcement, redacted
+  error labels via `SAFE_REASON_PATTERNS`, `AbortController` timeout, zod
+  schema validation on llm response.
+- `src/window-manager/yabai-bridge.ts` (360 LOC) — full yabai CLI driver with
+  `execFile(..., { shell: false })`, 5 s timeout, 1 MB maxBuffer, typed
+  `YabaiCommandError` + `WMUnavailableError`.
+- `src/window-manager/applescript-fallback.ts` (330 LOC) — AppleScript driver.
+- `src/window-manager/pane-ornaments.ts` (330 LOC) — JankyBorders wrapper.
+- `src/mcp/wm-tools.ts` (222 LOC) — `wm_move_window`, `wm_tile`, `wm_focus`, `wm_space_switch`.
+- Test files: `screen-capture.test.ts`, `vision-brief.test.ts`,
+  `yabai-bridge.test.ts`, `applescript-fallback.test.ts`,
+  `pane-ornaments.test.ts`, `wm-tools.test.ts`.
+
+**Objective signals:**
+- `npm test` (on integration): **1053/1053 pass** (up from 921/921 on main; delta = 132 new tests).
+- `tsc --noEmit`: clean.
+- Grep `": any\b\|as any"` across `src/perception src/window-manager src/mcp`: **0 matches**.
+- Grep `"fetch(\|https://"` across `src/perception`: **1 hit** —
+  `vision-brief.ts:71` `const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"`.
+  Correct — that's the single sanctioned LLM egress point, only reached when
+  `mode === "llm"` AND `!isPrivateApp(frame.active_app)` AND `apiKey` is set.
+
+**Still missing from §4 / §7 (hard gates for main merge):**
+1. **Audit log wiring.** `src/perception/` contains zero references to
+   `AuditLog.append()`. Captures, OCR calls, and Haiku vision calls all
+   happen silently — §7.5 unsatisfied.
+2. **`screen_context` sensor.** No new file in `src/sensors/`. `sensor-manager.ts`
+   does not register a screen-context source. §4.1 item 4 unsatisfied.
+3. **`nchinda_see()` MCP tool.** Only referenced in a comment in
+   `screen-capture.ts:150`. Not in `src/mcp/tool-schema.ts`, not in
+   `src/mcp/nchinda-tools.ts`, not in `scripts/mcp/serve-nchinda.mjs`. §4.1
+   item 5 unsatisfied.
+4. **⌘⇧Esc hotkey.** `forceOff()` exists but is not wired to a global
+   hotkey. `src/ui/hotkey.ts` has no binding. §7.4 half-satisfied (the
+   API exists; the trigger does not).
+5. **Banking bundle IDs in allowlist.** `DEFAULT_PRIVATE_APPS` in
+   `screen-capture.ts:68` covers password managers + Safari-bank but no
+   concrete banking bundle IDs (Chase, BoA, Wells, Citi) or general
+   banking-URL regex. §7.7 partial.
+6. **`buildBrief` URL is unconfigurable.** `ANTHROPIC_URL` is a module
+   constant. Makes it impossible to point at a local stub server in a dev
+   env and hard to enforce "no-egress" via network firewalls per-env. Minor.
+7. **WorktreeManager seam.** Phase 11 item 4 (agent → window slot mapping)
+   — pane-ornaments exists, but the orchestrator doesn't consume it. §4.2
+   item 4 unsatisfied; the "cyan researcher, blue coder" binding has no
+   caller.
+
+**Revised verdict: SHIP-WITH-FIXES.**
+
+The primitives are now in place and well-built. `screen-capture.ts` answers
+all four C1 targeted questions correctly (Swift gate clean, allowlist
+enforced BEFORE frame accepted + evicted-PNG unlinked, ring-buffer GC
+calls `tryUnlink`, permission-denied surfaces cleanly). `vision-brief.ts`
+answers all three C2 questions (local-only mode has zero fetch when
+private-app guarded, Haiku path has `AbortController` timeout + redacted
+`SAFE_REASON_PATTERNS`, private-app frames short-circuit before the LLM
+call). `yabai-bridge.ts` answers all three C3 questions (`execFile` with
+arg-array only, typed `WMUnavailableError` on probe failure, pure
+`computeLayout` untouched).
+
+But §7.4 (kill-switch wired to hotkey), §7.5 (audit log), §4.1.4
+(sensor), §4.1.5 (`nchinda_see`), and §4.2.4 (orchestrator seam) remain
+**must-fix before main**. Top-5 §8 list is revised accordingly:
+
+- **P-1** ~~Ship `screen-capture.ts`~~ ✅ **DONE** (`71382f0`).
+- **P-2** ~~Ship `vision-brief.ts`~~ ✅ **DONE** (`d4e55cd`).
+- **P-3** ~~Ship yabai + AppleScript + driver-factory~~ ✅ **PARTIAL** — both drivers shipped but no `driver-factory.ts`; callers must pick manually.
+- **P-4 (still open)** Wire `AuditLog` into `screen-capture.ts` (`capture.success|skip|error`) + `vision-brief.ts` (`llm.call|fallback`) + bind `⌘⇧Esc` in `src/ui/hotkey.ts` to `capturer.forceOff()`.
+- **P-5 (still open)** Register `nchinda_see` in `src/mcp/tool-schema.ts` +
+  handler in `nchinda-tools.ts` + scripts/mcp/serve-nchinda.mjs. Add
+  `src/sensors/screen-context.ts` that wraps `ScreenCapturer` as a
+  `Sensor` (debounce on active-app change, idle > 5 min, draft > 5 min).
+  Add `tests/phase8-11-dod.test.ts` gating the §4 bullets.
+
+**Main-merge blocked?** Yes, until P-4 + P-5 land. The §7 privacy
+guarantees depend on sensor+audit+hotkey wiring that is not yet done.
+
+---
+
+_Author: Tester 2 (independent reviewer, read-only). Initial verdict at
+`0d7582c` was BLOCK (only C1 + C3 primitives landed). Revised at
+`ea9674c` to SHIP-WITH-FIXES after ScreenCapturer, vision-brief,
+yabai-bridge, applescript-fallback, pane-ornaments, and wm-tools
+landed in parallel with the review — 1053/1053 tests now green, but
+audit log / hotkey / sensor / `nchinda_see` MCP wiring still open._
