@@ -28,23 +28,6 @@ function commandExists(cmd: string): Promise<boolean> {
 }
 
 /** Run execFile as a promise with optional timeout */
-function execFileAsync(
-  cmd: string,
-  args: string[],
-  timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      cmd,
-      args,
-      { timeout: timeoutMs },
-      (err, stdout, stderr) => {
-        if (err) reject(err);
-        else resolve({ stdout, stderr });
-      },
-    );
-  });
-}
 
 export class SpeechToText {
   private readonly language: string;
@@ -197,44 +180,16 @@ export class SpeechToText {
   }
 
   private async transcribe(wavPath: string): Promise<string> {
-    // whisper.cpp installs as `whisper-cli` via brew, not `whisper`
-    const whisperBin = process.env.WHISPER_CLI_PATH ?? "whisper-cli";
-    const modelPath = process.env.WHISPER_MODEL_PATH
-      ?? `${process.env.HOME}/.cortexos/models/ggml-small.en.bin`;
-
-    const whisperAvailable = await commandExists(whisperBin);
-
-    if (!whisperAvailable) {
-      console.warn(
-        `[stt] ${whisperBin} not found. Install: brew install whisper-cpp`,
-      );
-      return "[whisper not installed — transcript unavailable]";
-    }
-
     try {
-      // whisper-cli outputs to stdout with --output-txt --no-timestamps
-      const { stdout } = await execFileAsync(
-        whisperBin,
-        [
-          "--model", modelPath,
-          "--language", this.language,
-          "--no-timestamps",
-          "--file", wavPath,
-        ],
-        60_000,
-      );
-
-      // whisper-cli prints the transcript to stdout directly
-      const text = stdout
-        .split("\n")
-        .filter((line) => !line.startsWith("[") && line.trim())
-        .join(" ")
-        .trim();
-
-      return text || "[empty transcript]";
+      const { transcribeWithGroq } = await import("./groq-stt.js");
+      const result = await transcribeWithGroq(wavPath, {
+        language: this.language,
+        timeoutMs: 15_000,
+      });
+      return result.text || "";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[stt] Whisper transcription failed:", message);
+      console.error("[stt] Groq transcription failed:", message);
       return "[transcription failed]";
     }
   }

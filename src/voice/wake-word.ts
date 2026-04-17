@@ -14,12 +14,11 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { transcribeWithGroq } from "./groq-stt.js";
 
 export interface WakeWordOptions {
   keyword?: string;
   chunkSec?: number;          // recording chunk duration, default 3
-  whisperBin?: string;
-  modelPath?: string;
   onWake: () => void;
   onRmsUpdate?: (rms: number) => void;
 }
@@ -46,8 +45,6 @@ function commandExists(cmd: string): Promise<boolean> {
 export class WakeWordDetector {
   readonly keyword: string;
   private readonly chunkSec: number;
-  private readonly whisperBin: string;
-  private readonly modelPath: string;
   private onWake: () => void;
   private readonly onRmsUpdate?: (rms: number) => void;
 
@@ -60,12 +57,6 @@ export class WakeWordDetector {
     this.chunkSec = opts.chunkSec ?? 3;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
-    this.whisperBin = opts.whisperBin
-      ?? process.env.WHISPER_CLI_PATH
-      ?? "whisper-cli";
-    this.modelPath = opts.modelPath
-      ?? process.env.WHISPER_MODEL_PATH
-      ?? `${process.env.HOME}/.cortexos/models/ggml-small.en.bin`;
   }
 
   setOnWake(fn: () => void): void {
@@ -80,14 +71,12 @@ export class WakeWordDetector {
     if (this.listening) return;
 
     const soxOk = await commandExists("sox");
-    const whisperOk = await commandExists(this.whisperBin);
-
     if (!soxOk) {
       console.warn("[wake-word] sox not found — wake detection disabled");
       return;
     }
-    if (!whisperOk) {
-      console.warn(`[wake-word] ${this.whisperBin} not found — wake detection disabled`);
+    if (!process.env.GROQ_API_KEY) {
+      console.warn("[wake-word] GROQ_API_KEY not set — wake detection disabled");
       return;
     }
 
@@ -152,24 +141,11 @@ export class WakeWordDetector {
 
       if (!this.listening) return false;
 
-      // Transcribe with whisper
-      const { stdout } = await execFileAsync(this.whisperBin, [
-        "--model", this.modelPath,
-        "--language", "en",
-        "--no-timestamps",
-        "--file", tmpWav,
-      ], 15_000);
+      // Transcribe with Groq (whisper-large-v3-turbo, free, ~0.3s)
+      const result = await transcribeWithGroq(tmpWav, { timeoutMs: 8_000 });
+      const transcript = result.text.toLowerCase().trim();
 
-      // Check for keyword in transcript — fuzzy match because whisper
-      // may transcribe "Nchinda" as "Enchinda", "N'Chinda", "in Chinda", etc.
-      const transcript = stdout
-        .split("\n")
-        .filter((l) => !l.startsWith("[") && l.trim())
-        .join(" ")
-        .toLowerCase()
-        .trim();
-
-      if (transcript && transcript !== "[blank_audio]" && !transcript.startsWith("[music")) {
+      if (transcript) {
         console.log(`[wake-word] heard: "${transcript}"`);
       }
 
