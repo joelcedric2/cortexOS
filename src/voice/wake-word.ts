@@ -138,13 +138,15 @@ export class WakeWordDetector {
     const tmpWav = join(tmpdir(), `wake-${randomUUID()}.wav`);
 
     try {
-      // Record a short chunk
+      // Record a short chunk with gain boost — laptop mics often have
+      // very low input levels that whisper can't hear without amplification.
       await execFileAsync("sox", [
         "-d",
         "-r", "16000",
         "-c", "1",
         "-b", "16",
         tmpWav,
+        "gain", "40",                     // +40dB boost for quiet laptop mics
         "trim", "0", String(this.chunkSec),
       ], (this.chunkSec + 5) * 1000);
 

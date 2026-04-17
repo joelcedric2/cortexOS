@@ -104,7 +104,8 @@ export class SpeechToText {
       '-c', '1',      // mono
       '-b', '16',
       this.tmpWav,
-      'trim', '0', String(recordSec),  // fixed duration recording
+      'gain', '40',                     // +40dB boost for quiet laptop mics
+      'trim', '0', String(recordSec),   // fixed duration recording
     ]);
 
     this.soxProcess.on('error', (err) => {
