@@ -176,6 +176,36 @@ export class VectorStore {
   }
 
   /**
+   * Partial update of a memory record. Supports changing outcome and
+   * appending tags without overwriting the full row.
+   */
+  async updateMemory(
+    id: string,
+    patch: { outcome?: "success" | "fail"; addTags?: string[] },
+  ): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    let i = 1;
+
+    if (patch.outcome) {
+      sets.push(`outcome = $${i++}`);
+      params.push(patch.outcome);
+    }
+    if (patch.addTags && patch.addTags.length > 0) {
+      sets.push(`tags = tags || $${i++}`);
+      params.push(patch.addTags);
+    }
+
+    if (sets.length === 0) return;
+
+    params.push(id);
+    await this.pool.query(
+      `UPDATE memories SET ${sets.join(", ")} WHERE id = $${i}`,
+      params,
+    );
+  }
+
+  /**
    * Paginated listing of memories. Used by the Phase 7 consolidation worker
    * to stream memories in bounded pages for dedup + canon promotion.
    *

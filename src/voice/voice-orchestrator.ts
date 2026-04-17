@@ -24,6 +24,7 @@ import type {
 } from "../mcp/nchinda-look.js";
 import type { RewindResult } from "../rewind/rewind-query.js";
 import type { ConvIntent } from "../intent/conversation-intent.js";
+import type { VoiceMemory } from "./voice-memory.js";
 
 /**
  * Result-surface sink for rewind hits. Wired by the Orchestrator to the
@@ -83,6 +84,8 @@ export interface VoiceOrchestratorOptions {
     classify: (transcript: string) => Promise<ConvIntent>;
     route: (intent: ConvIntent) => Promise<unknown>;
   };
+  /** Voice memory persistence — stores interactions in pgvector. */
+  voiceMemory?: VoiceMemory;
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -105,7 +108,10 @@ export class VoiceOrchestrator {
   private readonly conversationIntent:
     | VoiceOrchestratorOptions["conversationIntent"]
     | undefined;
+  private readonly voiceMemory: VoiceMemory | undefined;
   private lastConvIntentTask: Promise<void> | undefined;
+  /** Tracks the memory ID of the current in-flight interaction for markFailed. */
+  private lastMemoryId: string | undefined;
   /** User name for personalized greetings. */
   readonly userName: string | undefined;
   private running = false;
@@ -134,6 +140,7 @@ export class VoiceOrchestrator {
     this.rewindSurface = opts.rewindSurface;
     this.userName = opts.userName;
     this.conversationIntent = opts.conversationIntent;
+    this.voiceMemory = opts.voiceMemory;
   }
 
   async start(): Promise<void> {
@@ -214,6 +221,7 @@ export class VoiceOrchestrator {
   }
 
   private async processVoiceInteraction(gen: number): Promise<void> {
+    const interactionStart = Date.now();
     try {
       // 1. Transition to listening (unless interruption already did it).
       if (this.sm.getState() !== "listening") {
@@ -260,6 +268,14 @@ export class VoiceOrchestrator {
         // internally and idempotent).
         if (this.killSwitch) {
           await this.killSwitch.trigger("voice");
+        }
+        // Mark the previous interaction as failed if we have a memory ID.
+        if (this.voiceMemory && this.lastMemoryId) {
+          try {
+            await this.voiceMemory.markFailed(this.lastMemoryId);
+          } catch {
+            // Best-effort — never break the kill path.
+          }
         }
         // One audit line documenting the routing decision.
         this.audit?.append({
@@ -414,6 +430,22 @@ export class VoiceOrchestrator {
       //     the generation bumps and isStale returns true after speak resolves.
       await this.tts.speak(reply);
       if (this.isStale(gen)) return;
+
+      // 10.5. Persist voice interaction to pgvector for future recall.
+      if (this.voiceMemory) {
+        try {
+          this.lastMemoryId = await this.voiceMemory.storeInteraction({
+            transcript,
+            reply,
+            outcome: "success",
+            durationMs: Date.now() - interactionStart,
+          });
+        } catch (err) {
+          // Memory persistence is best-effort — never break the voice flow.
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("[VoiceOrchestrator] voice memory store failed:", msg);
+        }
+      }
 
       // 11. Back to idle.
       this.sm.transition("idle");
