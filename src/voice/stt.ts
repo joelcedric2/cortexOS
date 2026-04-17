@@ -104,7 +104,7 @@ export class SpeechToText {
       '-c', '1',      // mono
       '-b', '16',
       this.tmpWav,
-      'gain', '40',                     // +40dB boost for quiet laptop mics
+      'norm', '-3',                     // normalize audio to -3dB peak
       'trim', '0', String(recordSec),   // fixed duration recording
     ]);
 

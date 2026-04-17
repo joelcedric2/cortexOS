@@ -146,7 +146,7 @@ export class WakeWordDetector {
         "-c", "1",
         "-b", "16",
         tmpWav,
-        "gain", "40",                     // +40dB boost for quiet laptop mics
+        "norm", "-3",                     // normalize audio to -3dB peak
         "trim", "0", String(this.chunkSec),
       ], (this.chunkSec + 5) * 1000);
 
