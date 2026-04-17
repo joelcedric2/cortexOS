@@ -219,13 +219,22 @@ export class VoiceOrchestrator {
         this.sm.transition("listening");
       }
 
-      // 2. Start STT recording — sox runs with silence detection and exits
+      // 2. PAUSE the wake-word detector so it releases the mic. Two sox
+      //    processes can't share the mic on macOS.
+      this.wakeWord.stop();
+
+      // 3. Start STT recording — sox runs with silence detection and exits
       //    on its own when the user stops speaking (~1.5s of silence).
+      console.log("[VoiceOrchestrator] Listening — speak now...");
       await this.stt.startRecording();
 
-      // 3. Wait for sox to finish (silence detected) → auto-calls stopRecording
+      // 4. Wait for sox to finish (silence detected) → auto-calls stopRecording
       //    which transcribes via whisper-cli. We poll until recording is done.
       const transcript = await this.waitForTranscript();
+
+      // 5. RESUME the wake-word detector for the next interaction.
+      this.wakeWord.setOnWake(() => this.handleWake());
+      this.wakeWord.start().catch(() => {});
       if (this.isStale(gen)) return;
 
       if (!transcript.trim()) {
