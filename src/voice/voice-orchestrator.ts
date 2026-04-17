@@ -15,6 +15,7 @@ import type { SpeechToText } from "./stt.js";
 import type { TextToSpeech } from "./tts.js";
 import type { GlobalHotkey } from "./hotkey.js";
 import type { EventBus } from "../ipc/event-bus.js";
+import type { EchoGate } from "./echo-gate.js";
 import { extractIntent } from "./intent-extractor.js";
 import type { PerceptionKillSwitch } from "../perception/kill-switch.js";
 import type { AuditLog } from "../proactivity/audit.js";
@@ -83,6 +84,11 @@ export interface VoiceOrchestratorOptions {
     classify: (transcript: string) => Promise<ConvIntent>;
     route: (intent: ConvIntent) => Promise<unknown>;
   };
+  /**
+   * Echo suppression gate — mutes mic transcription during TTS playback
+   * to prevent Nchinda from hearing its own voice as a false wake.
+   */
+  echoGate?: EchoGate;
 }
 
 const ERROR_RECOVERY_MS = 2000;
@@ -105,6 +111,7 @@ export class VoiceOrchestrator {
   private readonly conversationIntent:
     | VoiceOrchestratorOptions["conversationIntent"]
     | undefined;
+  private readonly echoGate: EchoGate | undefined;
   private lastConvIntentTask: Promise<void> | undefined;
   /** User name for personalized greetings. */
   readonly userName: string | undefined;
@@ -134,6 +141,7 @@ export class VoiceOrchestrator {
     this.rewindSurface = opts.rewindSurface;
     this.userName = opts.userName;
     this.conversationIntent = opts.conversationIntent;
+    this.echoGate = opts.echoGate;
   }
 
   async start(): Promise<void> {
@@ -187,7 +195,7 @@ export class VoiceOrchestrator {
       const name = this.userName ?? "Sir";
       const greeting = `Welcome ${name}. I am online and ready. What can I do for you?`;
       this.sm.transition("speaking");
-      this.tts.speak(greeting).then(() => {
+      this.speakWithEchoGate(greeting).then(() => {
         if (this.isStale(this.generation)) return;
         this.processVoiceInteraction(this.generation).catch((err) => {
           console.error("[Nchinda] Unhandled error in voice pipeline:", err);
@@ -306,7 +314,7 @@ export class VoiceOrchestrator {
         });
         if (this.isStale(gen)) return;
         this.sm.transition("speaking");
-        await this.tts.speak(reply);
+        await this.speakWithEchoGate(reply);
         if (this.isStale(gen)) return;
         this.sm.transition("idle"); await this.rearmWakeWord();
         return;
@@ -335,7 +343,7 @@ export class VoiceOrchestrator {
         });
         const reply = buildRewindReply(results);
         this.sm.transition("speaking");
-        await this.tts.speak(reply);
+        await this.speakWithEchoGate(reply);
         if (this.isStale(gen)) return;
         this.sm.transition("idle"); await this.rearmWakeWord();
         return;
@@ -367,7 +375,7 @@ export class VoiceOrchestrator {
       ];
       const ack = acks[Math.floor(Math.random() * acks.length)];
       this.sm.transition("speaking");
-      await this.tts.speak(ack);
+      await this.speakWithEchoGate(ack);
       if (this.isStale(gen)) return;
 
       // 7. Transition to THINKING — waveform shows particles/pulse,
@@ -383,7 +391,7 @@ export class VoiceOrchestrator {
         const update = `${role} just finished its work.`;
         try {
           this.sm.transition("speaking");
-          await this.tts.speak(update);
+          await this.speakWithEchoGate(update);
           if (!this.isStale(gen)) this.sm.transition("thinking");
         } catch {}
       });
@@ -395,7 +403,7 @@ export class VoiceOrchestrator {
         if (this.isStale(gen)) return;
         try {
           this.sm.transition("speaking");
-          await this.tts.speak(update);
+          await this.speakWithEchoGate(update);
           if (!this.isStale(gen)) {
             this.sm.transition("thinking");
           }
@@ -412,7 +420,7 @@ export class VoiceOrchestrator {
 
       // 10. TTS speaks the reply. If the user interrupts (handleWake fires),
       //     the generation bumps and isStale returns true after speak resolves.
-      await this.tts.speak(reply);
+      await this.speakWithEchoGate(reply);
       if (this.isStale(gen)) return;
 
       // 11. Back to idle.
@@ -441,6 +449,20 @@ export class VoiceOrchestrator {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Speak text through TTS with echo suppression. Mutes the echo gate
+   * before speaking and unmutes (with decay) after TTS finishes so the
+   * wake-word detector doesn't pick up Nchinda's own output.
+   */
+  private async speakWithEchoGate(text: string): Promise<void> {
+    this.echoGate?.mute();
+    try {
+      await this.tts.speak(text);
+    } finally {
+      this.echoGate?.unmute();
+    }
   }
 
   /**
