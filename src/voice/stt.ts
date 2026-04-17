@@ -79,7 +79,7 @@ export class SpeechToText {
     // returns "" for non-speech), so we record a fixed window and let
     // Groq sort out what's speech vs silence.
     const maxSec = 10;
-    console.log("[stt] Listening for 10s...");
+    console.log("[Nchinda] Recording for 10s...");
     this.soxProcess = execFile('sox', [
       '-d',
       '-r', '16000',
@@ -105,7 +105,7 @@ export class SpeechToText {
     // When sox exits (silence detected or max duration), mark done.
     this.soxProcess.on('exit', () => {
       clearTimeout(timeout);
-      console.log("[stt] sox finished recording (silence detected or max reached)");
+      console.log("[Nchinda] Recording complete");
       this.recording = false;
     });
 
@@ -159,9 +159,9 @@ export class SpeechToText {
       return "";
     }
 
-    console.log(`[stt] transcribing ${this.tmpWav}...`);
+    console.log(`[Nchinda] Transcribing ${this.tmpWav}...`);
     const transcript = await this.transcribe(this.tmpWav);
-    console.log(`[stt] groq result: "${transcript}"`);
+    console.log(`[Cedric] said: "${transcript}"`);
 
     // Clean up
     await unlink(this.tmpWav).catch(() => {});
@@ -185,7 +185,7 @@ export class SpeechToText {
       return result.text || "";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[stt] Groq transcription failed:", message);
+      console.error("[Nchinda] Transcription failed:", message);
       return "[transcription failed]";
     }
   }

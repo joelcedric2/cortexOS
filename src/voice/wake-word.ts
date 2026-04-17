@@ -61,15 +61,15 @@ export class WakeWordDetector {
     if (this.listening) return;
     const soxOk = await commandExists("sox");
     if (!soxOk) {
-      console.warn("[wake-word] sox not found — wake detection disabled");
+      console.warn("[Nchinda] sox not found — wake detection disabled");
       return;
     }
     if (!process.env.GROQ_API_KEY) {
-      console.warn("[wake-word] GROQ_API_KEY not set — wake detection disabled");
+      console.warn("[Nchinda] GROQ_API_KEY not set — wake detection disabled");
       return;
     }
     this.listening = true;
-    console.log(`[wake-word] Listening for "${this.keyword}"...`);
+    console.log(`[Nchinda] Listening for "${this.keyword}"...`);
     this.listenLoop();
   }
   stop(): void {
@@ -91,7 +91,7 @@ export class WakeWordDetector {
       try {
         const detected = await this.captureAndCheck();
         if (detected && this.listening) {
-          console.log(`[wake-word] "${this.keyword}" detected — waking`);
+          console.log(`[Nchinda] Wake word detected`);
           this.onWake();
           // After wake, pause briefly — the orchestrator will stop us
           // when it takes over the mic for STT recording.
@@ -101,7 +101,7 @@ export class WakeWordDetector {
         // Sox or Groq error — wait 1s then retry
         const msg = err instanceof Error ? err.message : String(err);
         if (this.listening) {
-          console.warn(`[wake-word] error: ${msg} — retrying in 1s`);
+          console.warn(`[Nchinda] error: ${msg} — retrying in 1s`);
           await new Promise((r) => setTimeout(r, 1000));
         }
       }
@@ -125,7 +125,7 @@ export class WakeWordDetector {
       const result = await transcribeWithGroq(tmpWav, { timeoutMs: 8_000 });
       const transcript = result.text.toLowerCase().trim();
       if (transcript) {
-        console.log(`[wake-word] heard: "${transcript}"`);
+        console.log(`[Cedric] "${transcript}"`);
       }
       // Match real variants Groq produces — but NOT loose substrings
       // like "chinda" alone (catches "chindang", keyboard noise artifacts).

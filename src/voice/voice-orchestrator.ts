@@ -185,23 +185,23 @@ export class VoiceOrchestrator {
     if (!this.greeted) {
       this.greeted = true;
       const name = this.userName ?? "Sir";
-      const greeting = `Welcome ${name}. Nchinda is online and ready. What can I do for you?`;
+      const greeting = `Welcome ${name}. I am online and ready. What can I do for you?`;
       this.sm.transition("speaking");
       this.tts.speak(greeting).then(() => {
         if (this.isStale(this.generation)) return;
         this.processVoiceInteraction(this.generation).catch((err) => {
-          console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);
+          console.error("[Nchinda] Unhandled error in voice pipeline:", err);
         });
       }).catch(() => {
         this.processVoiceInteraction(this.generation).catch((err) => {
-          console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);
+          console.error("[Nchinda] Unhandled error in voice pipeline:", err);
         });
       });
       return;
     }
 
     this.processVoiceInteraction(this.generation).catch((err) => {
-      console.error("[VoiceOrchestrator] Unhandled error in voice pipeline:", err);
+      console.error("[Nchinda] Unhandled error in voice pipeline:", err);
     });
   }
 
@@ -226,7 +226,7 @@ export class VoiceOrchestrator {
 
       // 3. Start STT recording — sox runs with silence detection and exits
       //    on its own when the user stops speaking (~1.5s of silence).
-      console.log("[VoiceOrchestrator] Listening — speak now...");
+      console.log("[Nchinda] Listening — speak now...");
       await this.stt.startRecording();
 
       // 4. Wait for sox to finish (silence detected) → auto-calls stopRecording
@@ -238,12 +238,12 @@ export class VoiceOrchestrator {
       if (!transcript.trim() || transcript.includes("[") || transcript.length < 3) {
         // Empty or placeholder transcript — go back to idle.
         // Wait 2s cooldown before re-enabling wake to prevent rapid cycling.
-        console.log("[VoiceOrchestrator] No speech detected — idle");
+        console.log("[Nchinda] No speech detected — idle");
         this.sm.transition("idle"); await this.rearmWakeWord();
         return;
       }
 
-      console.log(`[VoiceOrchestrator] Transcript: "${transcript}"`);
+      console.log(`[Cedric] "${transcript}"`);
 
       // Wake-word stays OFF until after TTS reply finishes — prevents
       // Nchinda from hearing its own voice through the speakers.
@@ -421,7 +421,7 @@ export class VoiceOrchestrator {
       if (this.isStale(gen)) return;
 
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[VoiceOrchestrator] Pipeline error:", message);
+      console.error("[Nchinda] Error:", message);
 
       // Transition to error, then recover to idle after delay.
       try {
@@ -452,7 +452,7 @@ export class VoiceOrchestrator {
   private async rearmWakeWord(): Promise<void> {
     this.wakeWord.setOnWake(() => this.handleWake());
     await this.wakeWord.start().catch(() => {});
-    console.log("[VoiceOrchestrator] Ready — say 'Nchinda'");
+    console.log("[Nchinda] Ready — say 'Nchinda'");
   }
 
   /**
