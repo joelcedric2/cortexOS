@@ -39,6 +39,7 @@ import { SpeechToText } from "../voice/stt.js";
 import { TextToSpeech } from "../voice/tts.js";
 import { VoiceWSBridge } from "../voice/ws-bridge.js";
 import { VoiceOrchestrator } from "../voice/voice-orchestrator.js";
+import { EchoGate } from "../voice/echo-gate.js";
 import { EventWSBridge } from "../ui/ws-bridge.js";
 import { UIApiServer } from "../ui/ui-api.js";
 import { AgentRegistry } from "../registry/agent-registry.js";
@@ -188,7 +189,8 @@ export class CortexController {
         this.voiceStateMachine = new AudioStateMachine();
         // Wake-word + STT + TTS constructed lazily here; callbacks wired by the
         // VoiceOrchestrator once it owns them (it installs its own onWake etc.).
-        this.wakeWordDetector = new WakeWordDetector({ onWake: () => {} });
+        const echoGate = new EchoGate();
+        this.wakeWordDetector = new WakeWordDetector({ onWake: () => {}, echoGate });
         const stt = new SpeechToText({});
         const tts = new TextToSpeech({});
 
@@ -289,6 +291,7 @@ export class CortexController {
           stateMachine: this.voiceStateMachine,
           bus: this.bus,
           onTask,
+          echoGate,
         });
 
         await this.voiceWSBridge.start();
