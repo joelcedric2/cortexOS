@@ -212,8 +212,11 @@ export class CortexController {
 
                   // claude -p runs non-interactive: takes a prompt, thinks,
                   // returns the response on stdout, exits. Perfect for voice.
+                  // The system prompt tells Claude this output will be spoken
+                  // aloud, so it should be conversational and concise.
+                  const voicePrompt = `[VOICE MODE] Your reply will be spoken aloud via text-to-speech. Be conversational, concise (1-4 sentences for simple questions, more for complex tasks). No markdown, no code blocks, no bullet points — just natural speech. The user said: "${transcript}"`;
                   const { stdout } = await execFileAsync("claude", [
-                    "-p", transcript,
+                    "-p", voicePrompt,
                     "--output-format", "text",
                   ], {
                     timeout: 120_000, // 2 min max for complex tasks

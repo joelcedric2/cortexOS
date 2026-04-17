@@ -353,21 +353,40 @@ export class VoiceOrchestrator {
         ts: new Date(),
       });
 
-      // 6. Process through cortexOS.
+      // 6. Acknowledge immediately — don't leave the user in silence
+      //    while Claude processes. Speak a random filler, then think.
+      const acks = [
+        "Got it. Working on that.",
+        "On it. Give me a moment.",
+        "Let me look into this.",
+        "Understood. One second.",
+        "Right away.",
+        "Sure thing. Processing.",
+        "Got it. Just a moment.",
+      ];
+      const ack = acks[Math.floor(Math.random() * acks.length)];
+      this.sm.transition("speaking");
+      await this.tts.speak(ack);
+      if (this.isStale(gen)) return;
+
+      // 7. Transition to THINKING — waveform shows particles/pulse,
+      //    user knows work is happening. Wake-word stays active for interrupts.
+      this.sm.transition("thinking");
+      await this.rearmWakeWord();
+
+      // 8. Process through cortexOS (Claude Code CLI).
       const reply = await this.onTask(transcript);
       if (this.isStale(gen)) return;
 
-      // 7. Transition to speaking — re-arm wake-word FIRST so the user
-      //    can interrupt by saying "Nchinda" or "stop" during TTS playback.
+      // 9. Transition to speaking — deliver the reply.
       this.sm.transition("speaking");
-      await this.rearmWakeWord();
 
-      // 8. TTS speaks the reply. If the user interrupts (handleWake fires),
-      //    the generation bumps and isStale returns true after speak resolves.
+      // 10. TTS speaks the reply. If the user interrupts (handleWake fires),
+      //     the generation bumps and isStale returns true after speak resolves.
       await this.tts.speak(reply);
       if (this.isStale(gen)) return;
 
-      // 9. Back to idle — wake-word already running from step 7.
+      // 11. Back to idle.
       this.sm.transition("idle");
     } catch (err) {
       if (this.isStale(gen)) return;
