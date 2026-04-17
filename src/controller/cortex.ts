@@ -48,7 +48,8 @@ import { SkillRegistryDB } from "../skills/skill-registry-db.js";
 import { AuditLog } from "../proactivity/audit.js";
 import { WorktreeManager } from "../workspace/worktree-manager.js";
 import { homedir } from "node:os";
-import { BrainSession, buildBrainClaudeMd } from "../voice/_gap-stubs.js";
+import { BrainSession } from "../voice/brain-session.js";
+import { buildBrainClaudeMd } from "../voice/brain-context.js";
 
 export interface CortexConfig {
   sessionName: string;

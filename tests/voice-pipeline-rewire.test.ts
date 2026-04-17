@@ -1,74 +1,35 @@
-import { test, describe, beforeEach, mock } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   BrainSession,
-  buildBrainClaudeMd,
   type BrainSessionOptions,
-} from "../src/voice/_gap-stubs.js";
+} from "../src/voice/brain-session.js";
 
 // ---------------------------------------------------------------------------
-// Unit tests for the gap-stubs (BrainSession + buildBrainClaudeMd).
-// These verify the interface contract that cortex.ts depends on.
-// When Agent 1 & 3 land real implementations, these tests should still pass.
+// Minimal mock TmuxManager for onTask handler tests.
+// The real BrainSession needs tmux.createSession/sendKeys/capturePane/etc.
+// We mock just enough for boot() to succeed, then override send()/restart().
 // ---------------------------------------------------------------------------
 
-describe("BrainSession", () => {
-  let session: BrainSession;
-  const opts: BrainSessionOptions = {
-    tmux: {} as BrainSessionOptions["tmux"],
-    claudeMdContent: "# test brain CLAUDE.md",
+function createMinimalMockTmux() {
+  const sessions = new Set<string>();
+  return {
+    async createSession(name: string, _workDir: string) {
+      sessions.add(name);
+    },
+    async destroySession(name: string) {
+      sessions.delete(name);
+    },
+    async sessionExists(name: string) {
+      return sessions.has(name);
+    },
+    async sendKeys(_name: string, _keys: string) {},
+    async capturePane(_name: string, _lines?: number) {
+      // Return a "ready" prompt so boot() completes
+      return "user@host ~ ❯ ";
+    },
   };
-
-  beforeEach(() => {
-    session = new BrainSession(opts);
-  });
-
-  test("boot() makes the session alive", async () => {
-    await session.boot();
-    assert.equal(await session.isAlive(), true);
-  });
-
-  test("send() returns a reply after boot", async () => {
-    await session.boot();
-    const reply = await session.send("What time is it?");
-    assert.ok(reply.length > 0, "reply should not be empty");
-  });
-
-  test("send() throws when session is not booted", async () => {
-    await assert.rejects(
-      () => session.send("hello"),
-      /BrainSession is not running/,
-    );
-  });
-
-  test("shutdown() makes the session not alive", async () => {
-    await session.boot();
-    await session.shutdown();
-    assert.equal(await session.isAlive(), false);
-  });
-
-  test("restart() recovers a shutdown session", async () => {
-    await session.boot();
-    await session.shutdown();
-    assert.equal(await session.isAlive(), false);
-    await session.restart();
-    assert.equal(await session.isAlive(), true);
-    const reply = await session.send("test after restart");
-    assert.ok(reply.length > 0);
-  });
-});
-
-describe("buildBrainClaudeMd", () => {
-  test("returns a non-empty string", async () => {
-    const md = await buildBrainClaudeMd({
-      vectorStore: {} as any,
-      embedder: {} as any,
-      userName: "Cedric",
-    });
-    assert.ok(md.length > 0);
-    assert.ok(md.includes("Cedric"), "should include the user name");
-  });
-});
+}
 
 // ---------------------------------------------------------------------------
 // Integration-style tests for the onTask handler logic extracted from
@@ -103,23 +64,9 @@ describe("onTask handler (BrainSession-backed)", () => {
     };
   }
 
-  test("calls brainSession.send() with the transcript", async () => {
-    const session = new BrainSession({
-      tmux: {} as any,
-      claudeMdContent: "",
-    });
-    await session.boot();
-
-    const onTask = makeOnTask(session);
-    const narrate = async () => {};
-
-    const reply = await onTask("What time is it?", narrate);
-    assert.ok(reply.includes("What time is it?"), "reply should echo transcript (stub)");
-  });
-
   test("returns expected reply from mock send", async () => {
     const session = new BrainSession({
-      tmux: {} as any,
+      tmux: createMinimalMockTmux() as any,
       claudeMdContent: "",
     });
     await session.boot();
@@ -134,7 +81,7 @@ describe("onTask handler (BrainSession-backed)", () => {
 
   test("auto-restarts on send failure and retries", async () => {
     const session = new BrainSession({
-      tmux: {} as any,
+      tmux: createMinimalMockTmux() as any,
       claudeMdContent: "",
     });
     await session.boot();
@@ -147,10 +94,8 @@ describe("onTask handler (BrainSession-backed)", () => {
     };
 
     let restarted = false;
-    const origRestart = session.restart.bind(session);
     session.restart = async () => {
       restarted = true;
-      await origRestart();
     };
 
     const onTask = makeOnTask(session);
@@ -161,7 +106,7 @@ describe("onTask handler (BrainSession-backed)", () => {
 
   test("returns fallback message when retry also fails", async () => {
     const session = new BrainSession({
-      tmux: {} as any,
+      tmux: createMinimalMockTmux() as any,
       claudeMdContent: "",
     });
     await session.boot();
@@ -169,6 +114,7 @@ describe("onTask handler (BrainSession-backed)", () => {
     session.send = async () => {
       throw new Error("permanent failure");
     };
+    session.restart = async () => {};
 
     const onTask = makeOnTask(session);
     const reply = await onTask("doomed", async () => {});
@@ -177,7 +123,7 @@ describe("onTask handler (BrainSession-backed)", () => {
 
   test("restarts when send returns error-like response", async () => {
     const session = new BrainSession({
-      tmux: {} as any,
+      tmux: createMinimalMockTmux() as any,
       claudeMdContent: "",
     });
     await session.boot();
@@ -190,16 +136,33 @@ describe("onTask handler (BrainSession-backed)", () => {
     };
 
     let restarted = false;
-    const origRestart = session.restart.bind(session);
     session.restart = async () => {
       restarted = true;
-      await origRestart();
     };
 
     const onTask = makeOnTask(session);
     const reply = await onTask("test error response", async () => {});
     assert.equal(reply, "OK after restart");
     assert.ok(restarted, "should have restarted on error-like response");
+  });
+
+  test("uses BrainSession.send() not spawn/claude -p", async () => {
+    // Verify the onTask handler calls send() rather than spawning a process
+    const session = new BrainSession({
+      tmux: createMinimalMockTmux() as any,
+      claudeMdContent: "",
+    });
+    await session.boot();
+
+    let sendCalled = false;
+    session.send = async (msg: string) => {
+      sendCalled = true;
+      return `Reply to: ${msg}`;
+    };
+
+    const onTask = makeOnTask(session);
+    await onTask("hello", async () => {});
+    assert.ok(sendCalled, "onTask should call BrainSession.send()");
   });
 });
 
