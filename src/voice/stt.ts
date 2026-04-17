@@ -91,12 +91,18 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
+    // Sox with built-in silence detection (VAD):
+    //   silence 1 0.3 3%  → skip leading silence; speech starts after 0.3s above 3%
+    //   1 1.5 3%          → stop recording after 1.5s of silence below 3% (user stopped talking)
+    // This makes sox exit on its own when the user finishes speaking.
     this.soxProcess = execFile('sox', [
       '-d',           // default audio device
       '-r', '16000',
       '-c', '1',      // mono
       '-b', '16',
       this.tmpWav,
+      'silence', '1', '0.3', '3%',   // wait for speech to start
+      '1', '1.5', '3%',              // stop after 1.5s of silence
     ]);
 
     this.soxProcess.on('error', (err) => {
@@ -104,15 +110,21 @@ export class SpeechToText {
       this.recording = false;
     });
 
-    // Auto-stop after timeout
+    // Safety timeout — in case silence detection never triggers
     const timeout = setTimeout(() => {
       if (this.recording) {
+        console.log('[stt] recording timeout — stopping');
         void this.stopRecording();
       }
     }, this.timeoutMs);
 
+    // When sox exits naturally (silence detected), auto-trigger stopRecording
     this.soxProcess.on('exit', () => {
       clearTimeout(timeout);
+      if (this.recording) {
+        console.log('[stt] sox exited (silence detected) — transcribing');
+        void this.stopRecording();
+      }
     });
 
     // Partial transcription every 2s (fire partial with elapsed info)
@@ -145,19 +157,20 @@ export class SpeechToText {
       this.partialTimer = null;
     }
 
-    // Kill sox to finalize the WAV file
+    // Finalize the WAV file — sox may have already exited (silence detection)
+    // or may still be recording (manual stop / timeout). Kill only if alive.
     if (this.soxProcess) {
-      this.soxProcess.kill('SIGTERM');
-      // Wait for process exit
-      await new Promise<void>((resolve) => {
-        if (this.soxProcess) {
-          this.soxProcess.on('exit', resolve);
-          // Safety timeout
-          setTimeout(resolve, 2000);
-        } else {
-          resolve();
-        }
-      });
+      if (!this.soxProcess.killed && this.soxProcess.exitCode === null) {
+        this.soxProcess.kill('SIGTERM');
+        await new Promise<void>((resolve) => {
+          if (this.soxProcess) {
+            this.soxProcess.on('exit', resolve);
+            setTimeout(resolve, 2000);
+          } else {
+            resolve();
+          }
+        });
+      }
       this.soxProcess = null;
     }
 

@@ -219,11 +219,13 @@ export class VoiceOrchestrator {
         this.sm.transition("listening");
       }
 
-      // 2. Start STT recording.
-      this.stt.startRecording();
+      // 2. Start STT recording — sox runs with silence detection and exits
+      //    on its own when the user stops speaking (~1.5s of silence).
+      await this.stt.startRecording();
 
-      // 3. Wait for STT to complete (silence detection handled by STT).
-      const transcript = await this.stt.stopRecording();
+      // 3. Wait for sox to finish (silence detected) → auto-calls stopRecording
+      //    which transcribes via whisper-cli. We poll until recording is done.
+      const transcript = await this.waitForTranscript();
       if (this.isStale(gen)) return;
 
       if (!transcript.trim()) {
@@ -375,6 +377,29 @@ export class VoiceOrchestrator {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Wait for the STT to finish recording (sox exits on silence detection)
+   * then return the transcript. Polls isRecording() every 200ms.
+   * Falls back to stopRecording after 30s safety timeout.
+   */
+  private async waitForTranscript(): Promise<string> {
+    const maxWait = 30_000;
+    const start = Date.now();
+
+    // Wait for sox to exit on its own (silence detected)
+    while (this.stt.isRecording() && Date.now() - start < maxWait) {
+      await this.delay(200);
+    }
+
+    // If still recording after timeout, force stop
+    if (this.stt.isRecording()) {
+      return this.stt.stopRecording();
+    }
+
+    // Sox already exited — stopRecording will just transcribe the file
+    return this.stt.stopRecording();
   }
 
   /**
