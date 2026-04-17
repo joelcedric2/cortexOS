@@ -48,6 +48,7 @@ import { SkillRegistryDB } from "../skills/skill-registry-db.js";
 import { AuditLog } from "../proactivity/audit.js";
 import { WorktreeManager } from "../workspace/worktree-manager.js";
 import { homedir } from "node:os";
+import { BrainSession, buildBrainClaudeMd } from "../voice/_gap-stubs.js";
 
 export interface CortexConfig {
   sessionName: string;
@@ -100,6 +101,7 @@ export class CortexController {
   private skillRegistryDb: SkillRegistryDB | null = null;
   private auditLog: AuditLog | null = null;
   private worktreeManager: WorktreeManager | null = null;
+  private brainSession: BrainSession | null = null;
   private initialized = false;
 
   constructor(private readonly config: CortexConfig) {
@@ -198,89 +200,53 @@ export class CortexController {
           stateMachine: this.voiceStateMachine,
         });
 
+        // Build the brain's CLAUDE.md with full cortexOS context
+        const brainClaudeMd = await buildBrainClaudeMd({
+          vectorStore: this.vectorStore,
+          embedder: this.embedder,
+          userName: "Cedric",
+        });
+
+        // Boot persistent brain session — replaces the old claude -p one-shot
+        this.brainSession = new BrainSession({
+          tmux: this.tmux,
+          claudeMdContent: brainClaudeMd,
+        });
+        await this.brainSession.boot();
+        console.log("[Nchinda] Brain session active");
+
         const onTask: (transcript: string, narrate: (update: string) => Promise<void>) => Promise<string> =
           this.voiceRunFactory
             ? this.voiceRunFactory
-            : async (transcript, narrate) => {
-                console.log(`[Nchinda] Processing via Claude CLI: "${transcript}"`);
+            : async (transcript, _narrate) => {
+                console.log(`[Nchinda] Processing: "${transcript}"`);
                 try {
-                  const { spawn: sp } = await import("node:child_process");
+                  let reply = await this.brainSession!.send(transcript);
 
-                  const voicePrompt = `[VOICE MODE] Your reply will be spoken aloud via text-to-speech. Be conversational, concise (1-4 sentences for simple questions, more for complex tasks). No markdown, no code blocks, no bullet points — just natural speech. The user said: "${transcript}"`;
+                  // Auto-restart on failure: if send throws or returns
+                  // an error-like response, restart once and retry.
+                  if (!reply || reply.startsWith("[error]")) {
+                    console.warn("[Nchinda] Brain session returned error, restarting...");
+                    await this.brainSession!.restart();
+                    reply = await this.brainSession!.send(transcript);
+                  }
 
-                  return await new Promise<string>((resolve) => {
-                    const proc = sp("claude", [
-                      "-p", voicePrompt,
-                      "--output-format", "text",
-                    ], {
-                      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cortexos-voice" },
-                      stdio: ["ignore", "pipe", "pipe"],
-                    });
-
-                    let stdout = "";
-                    let lastNarration = Date.now();
-
-                    // Collect stdout
-                    proc.stdout?.on("data", (chunk: Buffer) => {
-                      stdout += chunk.toString();
-                    });
-
-                    // If the task takes > 15s, narrate that we're still working
-                    const progressTimer = setInterval(async () => {
-                      const elapsed = Math.round((Date.now() - lastNarration) / 1000);
-                      if (elapsed >= 15) {
-                        lastNarration = Date.now();
-                        const updates = [
-                          "Still working on this. Making progress.",
-                          "This is taking a moment. Almost there.",
-                          "Still on it. I'll have something for you shortly.",
-                          "Working through this step by step.",
-                        ];
-                        const msg = updates[Math.floor(Math.random() * updates.length)];
-                        await narrate(msg).catch(() => {});
-                      }
-                    }, 5_000);
-
-                    // Timeout at 5 min
-                    const timeout = setTimeout(() => {
-                      proc.kill("SIGTERM");
-                      clearInterval(progressTimer);
-                      resolve("That task took too long. Try breaking it into smaller pieces.");
-                    }, 300_000);
-
-                    proc.on("close", (code) => {
-                      clearInterval(progressTimer);
-                      clearTimeout(timeout);
-
-                      const reply = stdout.trim();
-                      if (!reply) {
-                        resolve("I processed that but got no output. Try rephrasing.");
-                        return;
-                      }
-
-                      // Truncate for TTS
-                      const spoken = reply.length > 800
-                        ? reply.slice(0, 800) + "... The full response is in the activity journal."
-                        : reply;
-
-                      console.log(`[Nchinda] Reply (${reply.length} chars, exit ${code})`);
-                      resolve(spoken);
-                    });
-
-                    proc.on("error", (err) => {
-                      clearInterval(progressTimer);
-                      clearTimeout(timeout);
-                      if (err.message.includes("ENOENT")) {
-                        resolve("I can't find the Claude CLI. Make sure 'claude' is on your PATH.");
-                      } else {
-                        resolve("Something went wrong while I was working on that. Try again.");
-                      }
-                    });
-                  });
+                  console.log(`[Nchinda] Reply: "${reply.slice(0, 100)}..."`);
+                  return reply;
                 } catch (err) {
                   const msg = err instanceof Error ? err.message : String(err);
-                  console.error(`[Nchinda] Error: ${msg}`);
-                  return "Something went wrong. Try again.";
+                  console.error(`[Nchinda] Brain session error: ${msg}`);
+                  // Attempt one restart + retry
+                  try {
+                    await this.brainSession!.restart();
+                    const retryReply = await this.brainSession!.send(transcript);
+                    console.log(`[Nchinda] Retry reply: "${retryReply.slice(0, 100)}..."`);
+                    return retryReply;
+                  } catch (retryErr) {
+                    const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                    console.error(`[Nchinda] Retry also failed: ${retryMsg}`);
+                    return "Something went wrong. Try again.";
+                  }
                 }
               };
 
@@ -714,6 +680,17 @@ export class CortexController {
       this.agentRegistry = null;
     }
     this.auditLog = null;
+
+    // Shutdown the persistent brain session before voice subsystem teardown
+    if (this.brainSession) {
+      try {
+        await this.brainSession.shutdown();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[CortexOS] Brain session shutdown error: ${message}`);
+      }
+      this.brainSession = null;
+    }
 
     // Stop voice subsystem before anything else so the WS bridge
     // releases its TCP port promptly.
