@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// Load ~/.cortexos/config.json FIRST — injects API keys into process.env
+// before any subsystem reads them. This is the OpenClaw pattern: keys
+// live in the agent's filesystem, not in shell profiles.
+import { loadCortexConfig } from "./config/load-config.js";
+loadCortexConfig();
+
 import { Command } from "commander";
 import { CortexController } from "./controller/cortex.js";
 import { ipcCall, isControllerRunning } from "./ipc/client.js";
