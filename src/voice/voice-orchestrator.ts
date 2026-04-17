@@ -232,16 +232,24 @@ export class VoiceOrchestrator {
       //    which transcribes via whisper-cli. We poll until recording is done.
       const transcript = await this.waitForTranscript();
 
+      if (this.isStale(gen)) return;
+
+      if (!transcript.trim() || transcript.includes("[") || transcript.length < 3) {
+        // Empty or placeholder transcript — go back to idle.
+        // Wait 2s cooldown before re-enabling wake to prevent rapid cycling.
+        console.log("[VoiceOrchestrator] No speech detected — idle (2s cooldown)");
+        this.sm.transition("idle");
+        await this.delay(2000);
+        this.wakeWord.setOnWake(() => this.handleWake());
+        this.wakeWord.start().catch(() => {});
+        return;
+      }
+
+      console.log(`[VoiceOrchestrator] Transcript: "${transcript}"`);
+
       // 5. RESUME the wake-word detector for the next interaction.
       this.wakeWord.setOnWake(() => this.handleWake());
       this.wakeWord.start().catch(() => {});
-      if (this.isStale(gen)) return;
-
-      if (!transcript.trim()) {
-        // Empty transcript — go back to idle.
-        this.sm.transition("idle");
-        return;
-      }
 
       // 3.5. Phase 8.5 — classify the transcript. Orchestrator-level intents
       // (kill / pause / resume / config) short-circuit the normal task

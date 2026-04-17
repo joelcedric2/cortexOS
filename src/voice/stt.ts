@@ -66,7 +66,7 @@ export class SpeechToText {
     this.language = opts.language ?? 'en';
     this.onPartial = opts.onPartial;
     this.onFinal = opts.onFinal;
-    this.timeoutMs = opts.timeoutMs ?? 30_000;
+    this.timeoutMs = opts.timeoutMs ?? 8_000;
   }
 
   /** Test hook: resolve the next stopRecording() with `transcript` synchronously. */
@@ -91,18 +91,20 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
-    // Sox with built-in silence detection (VAD):
-    //   silence 1 0.3 3%  → skip leading silence; speech starts after 0.3s above 3%
-    //   1 1.5 3%          → stop recording after 1.5s of silence below 3% (user stopped talking)
-    // This makes sox exit on its own when the user finishes speaking.
+    // Record for a fixed duration. Silence detection via sox's `silence`
+    // effect was too unreliable on laptop mics (ambient noise triggered
+    // false starts, or sox exited immediately). Instead: record for a
+    // fixed window (default 8s) then transcribe whatever was captured.
+    // The user gets a clear "speak now" prompt and a defined window.
+    const recordSec = Math.min(Math.floor(this.timeoutMs / 1000), 15);
+    console.log(`[stt] Recording for ${recordSec}s — speak now`);
     this.soxProcess = execFile('sox', [
       '-d',           // default audio device
       '-r', '16000',
       '-c', '1',      // mono
       '-b', '16',
       this.tmpWav,
-      'silence', '1', '0.3', '3%',   // wait for speech to start
-      '1', '1.5', '3%',              // stop after 1.5s of silence
+      'trim', '0', String(recordSec),  // fixed duration recording
     ]);
 
     this.soxProcess.on('error', (err) => {

@@ -61,7 +61,9 @@ export class WakeWordDetector {
 
   constructor(opts: WakeWordOptions) {
     this.keyword = opts.keyword ?? 'nchinda';
-    this.sensitivity = opts.sensitivity ?? 0.5;
+    // Lower sensitivity (0.3) to avoid triggering on ambient laptop noise.
+    // User can override via opts if their environment is quieter.
+    this.sensitivity = opts.sensitivity ?? 0.3;
     this.sampleRate = opts.sampleRate ?? 16000;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
