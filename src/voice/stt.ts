@@ -73,24 +73,20 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
-    // Record up to 60s with silence detection:
-    // - Wait up to 5s for speech to start (above 2% threshold)
-    // - Once speech detected, record until 3s of silence (below 2%)
-    // - 2% threshold is higher than 1% to avoid triggering on room noise
-    // - If no speech detected within 5s, sox still captures the 5s of
-    //   ambient audio — Groq returns "" for non-speech, orchestrator
-    //   treats empty as "no speech detected"
-    const maxSec = 60;
-    console.log("[stt] Listening... (3s silence when done)");
+    // Fixed 10s recording. Sox silence detection was unreliable on this
+    // Mac — it strips "leading silence" from the output, producing 0-byte
+    // files in quiet rooms. Groq handles trailing silence perfectly (just
+    // returns "" for non-speech), so we record a fixed window and let
+    // Groq sort out what's speech vs silence.
+    const maxSec = 10;
+    console.log("[stt] Listening for 10s...");
     this.soxProcess = execFile('sox', [
       '-d',
       '-r', '16000',
       '-c', '1',
       '-b', '16',
       this.tmpWav,
-      'silence', '1', '0.5', '2%',   // start after 0.5s of sound > 2%
-      '1', '3.0', '2%',              // stop after 3s silence < 2%
-      'trim', '0', String(maxSec),    // hard cap 60s
+      'trim', '0', String(maxSec),
     ]);
 
     this.soxProcess.on('error', (err) => {
