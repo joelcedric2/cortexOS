@@ -1,88 +1,77 @@
 /**
- * Wake-word detector using energy-based Voice Onset Detection.
+ * Wake-word detector — always listening, only fires on "Nchinda".
  *
- * Option A (recommended): Captures mic audio via sox, computes RMS on
- * 50ms chunks. Sustained RMS above threshold for 300ms+ triggers wake.
- * Actual keyword matching ("nchinda") deferred to Phase 7 (Porcupine).
+ * Records rolling 3-second audio chunks via sox, transcribes each with
+ * whisper-cli, and checks the transcript for the keyword. When the
+ * keyword is detected, fires the onWake callback.
  *
- * DECISION: Using energy-based VOD to avoid commercial SDK dependency.
+ * This runs continuously whenever cortexOS is up. The mic is always on.
+ * Only the keyword triggers action — ambient noise is ignored.
  */
 
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile, type ChildProcess } from "node:child_process";
+import { unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export interface WakeWordOptions {
-  keyword?: string;           // default "nchinda" (reserved for Phase 7)
-  sensitivity?: number;       // 0..1, default 0.5
-  sampleRate?: number;        // default 16000
+  keyword?: string;
+  chunkSec?: number;          // recording chunk duration, default 3
+  whisperBin?: string;
+  modelPath?: string;
   onWake: () => void;
   onRmsUpdate?: (rms: number) => void;
 }
 
-/** Duration in ms that RMS must stay above threshold to trigger wake */
-const SUSTAINED_MS = 300;
-
-/** Chunk size in ms for RMS computation */
-const CHUNK_MS = 50;
-
-/** Map sensitivity (0..1) to an RMS threshold. Higher sensitivity = lower threshold. */
-function sensitivityToThreshold(sensitivity: number): number {
-  // sensitivity 0 -> threshold 0.1, sensitivity 1 -> threshold 0.005
-  const clamped = Math.max(0, Math.min(1, sensitivity));
-  return 0.1 - clamped * 0.095;
+function execFileAsync(
+  cmd: string,
+  args: string[],
+  timeoutMs?: number,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) reject(err);
+      else resolve({ stdout, stderr });
+    });
+  });
 }
 
-/** Compute RMS from a buffer of 16-bit signed PCM samples */
-export function computeRms(pcm: Buffer): number {
-  const sampleCount = Math.floor(pcm.length / 2);
-  if (sampleCount === 0) return 0;
-
-  let sumSquares = 0;
-  for (let i = 0; i < sampleCount; i++) {
-    const sample = pcm.readInt16LE(i * 2);
-    const normalized = sample / 32768;
-    sumSquares += normalized * normalized;
-  }
-
-  return Math.sqrt(sumSquares / sampleCount);
+function commandExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("which", [cmd], (err) => resolve(!err));
+  });
 }
 
 export class WakeWordDetector {
   readonly keyword: string;
-  private readonly sensitivity: number;
-  private readonly sampleRate: number;
+  private readonly chunkSec: number;
+  private readonly whisperBin: string;
+  private readonly modelPath: string;
   private onWake: () => void;
   private readonly onRmsUpdate?: (rms: number) => void;
-  private readonly threshold: number;
 
   private listening = false;
   private soxProcess: ChildProcess | null = null;
-  private sustainedStart: number | null = null;
-  private wakeFired = false;
+  private loopTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: WakeWordOptions) {
-    this.keyword = opts.keyword ?? 'nchinda';
-    // Lower sensitivity (0.3) to avoid triggering on ambient laptop noise.
-    // User can override via opts if their environment is quieter.
-    this.sensitivity = opts.sensitivity ?? 0.3;
-    this.sampleRate = opts.sampleRate ?? 16000;
+    this.keyword = (opts.keyword ?? "nchinda").toLowerCase();
+    this.chunkSec = opts.chunkSec ?? 3;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
-    this.threshold = sensitivityToThreshold(this.sensitivity);
+    this.whisperBin = opts.whisperBin
+      ?? process.env.WHISPER_CLI_PATH
+      ?? "whisper-cli";
+    this.modelPath = opts.modelPath
+      ?? process.env.WHISPER_MODEL_PATH
+      ?? `${process.env.HOME}/.cortexos/models/ggml-base.en.bin`;
   }
 
-  /**
-   * Replace the wake callback after construction. Used by VoiceOrchestrator,
-   * which holds the detector but wires the handler later when it knows what
-   * to do with a wake event.
-   */
   setOnWake(fn: () => void): void {
     this.onWake = fn;
   }
 
-  /**
-   * Test hook: synchronously fire the wake callback without running sox.
-   * Use only from tests.
-   */
   _simulateWake(): void {
     this.onWake();
   }
@@ -90,72 +79,31 @@ export class WakeWordDetector {
   async start(): Promise<void> {
     if (this.listening) return;
 
-    // Verify sox is available
-    const soxExists = await new Promise<boolean>((resolve) => {
-      execFile('which', ['sox'], (err) => resolve(!err));
-    });
+    const soxOk = await commandExists("sox");
+    const whisperOk = await commandExists(this.whisperBin);
 
-    if (!soxExists) {
-      console.warn(
-        '[wake-word] sox not found on PATH. Voice wake detection disabled.',
-      );
+    if (!soxOk) {
+      console.warn("[wake-word] sox not found — wake detection disabled");
+      return;
+    }
+    if (!whisperOk) {
+      console.warn(`[wake-word] ${this.whisperBin} not found — wake detection disabled`);
       return;
     }
 
     this.listening = true;
-    this.wakeFired = false;
-    this.sustainedStart = null;
-
-    // Calculate bytes per chunk: sampleRate * 2 bytes * chunkMs / 1000
-    const bytesPerChunk = Math.floor(
-      (this.sampleRate * 2 * CHUNK_MS) / 1000,
-    );
-
-    this.soxProcess = execFile('sox', [
-      '-d',           // default audio device
-      '-t', 'raw',    // raw PCM output
-      '-r', String(this.sampleRate),
-      '-c', '1',      // mono
-      '-e', 'signed',
-      '-b', '16',     // 16-bit
-      '-',            // stdout
-    ]);
-
-    let buffer = Buffer.alloc(0);
-
-    this.soxProcess.stdout?.on('data', (rawChunk: Buffer | string) => {
-      if (!this.listening) return;
-
-      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-      buffer = Buffer.concat([buffer, chunk]);
-
-      while (buffer.length >= bytesPerChunk) {
-        const pcmChunk = buffer.subarray(0, bytesPerChunk);
-        buffer = buffer.subarray(bytesPerChunk);
-
-        const rms = computeRms(pcmChunk);
-        this.onRmsUpdate?.(rms);
-        this.processRms(rms);
-      }
-    });
-
-    this.soxProcess.on('error', (err) => {
-      console.error('[wake-word] sox process error:', err.message);
-      this.listening = false;
-    });
-
-    this.soxProcess.on('exit', () => {
-      this.listening = false;
-      this.soxProcess = null;
-    });
+    console.log(`[wake-word] Listening for "${this.keyword}"...`);
+    this.listenLoop();
   }
 
   stop(): void {
     this.listening = false;
-    this.sustainedStart = null;
-
+    if (this.loopTimer) {
+      clearTimeout(this.loopTimer);
+      this.loopTimer = null;
+    }
     if (this.soxProcess) {
-      this.soxProcess.kill('SIGTERM');
+      try { this.soxProcess.kill("SIGTERM"); } catch {}
       this.soxProcess = null;
     }
   }
@@ -164,26 +112,62 @@ export class WakeWordDetector {
     return this.listening;
   }
 
-  /** @internal — exposed for testing */
-  processRms(rms: number): void {
-    if (this.wakeFired) return;
-
-    if (rms >= this.threshold) {
-      if (this.sustainedStart === null) {
-        this.sustainedStart = Date.now();
-      } else if (Date.now() - this.sustainedStart >= SUSTAINED_MS) {
-        this.wakeFired = true;
-        this.onWake();
+  private async listenLoop(): Promise<void> {
+    while (this.listening) {
+      try {
+        const detected = await this.captureAndCheck();
+        if (detected && this.listening) {
+          console.log(`[wake-word] "${this.keyword}" detected — waking`);
+          this.onWake();
+          // After wake, pause briefly — the orchestrator will stop us
+          // when it takes over the mic for STT recording.
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      } catch (err) {
+        // Sox or whisper error — wait 1s then retry
+        const msg = err instanceof Error ? err.message : String(err);
+        if (this.listening) {
+          console.warn(`[wake-word] error: ${msg} — retrying in 1s`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
-    } else {
-      // Reset sustained counter on silence
-      this.sustainedStart = null;
     }
   }
 
-  /** Reset wake state so detector can trigger again */
-  resetWake(): void {
-    this.wakeFired = false;
-    this.sustainedStart = null;
+  private async captureAndCheck(): Promise<boolean> {
+    const tmpWav = join(tmpdir(), `wake-${randomUUID()}.wav`);
+
+    try {
+      // Record a short chunk
+      await execFileAsync("sox", [
+        "-d",
+        "-r", "16000",
+        "-c", "1",
+        "-b", "16",
+        tmpWav,
+        "trim", "0", String(this.chunkSec),
+      ], (this.chunkSec + 5) * 1000);
+
+      if (!this.listening) return false;
+
+      // Transcribe with whisper
+      const { stdout } = await execFileAsync(this.whisperBin, [
+        "--model", this.modelPath,
+        "--language", "en",
+        "--no-timestamps",
+        "--file", tmpWav,
+      ], 15_000);
+
+      // Check for keyword in transcript
+      const transcript = stdout.toLowerCase();
+      const hasKeyword = transcript.includes(this.keyword);
+
+      // Feed RMS-like signal to the waveform (1 if keyword, 0.1 otherwise)
+      this.onRmsUpdate?.(hasKeyword ? 0.8 : 0.05);
+
+      return hasKeyword;
+    } finally {
+      await unlink(tmpWav).catch(() => {});
+    }
   }
 }
