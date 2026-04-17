@@ -73,26 +73,18 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
-    // Record up to 60s — sox runs with silence detection that ONLY stops
-    // after the user finishes a long instruction (3s of silence after speech).
-    // Groq's whisper-large-v3 handles the transcription accuracy; sox just
-    // needs to capture cleanly and stop when the user is done talking.
-    //
-    // The `silence` effect here works because Groq (not local whisper) does
-    // the transcription — we don't need the audio to be clean, just captured.
-    // 1 0.5 1% = start recording after 0.5s of sound above 1%
-    // 1 3.0 1% = stop after 3 seconds of silence below 1%
-    const maxSec = 60;
-    console.log("[stt] Listening... (speak now, 3s silence to finish)");
+    // Record for 10 seconds. No silence detection — Groq handles whatever
+    // audio is captured, including trailing silence. 10s is enough for most
+    // voice commands. For longer instructions, say "Nchinda" again to continue.
+    const maxSec = 10;
+    console.log("[stt] Listening for 10s...");
     this.soxProcess = execFile('sox', [
       '-d',
       '-r', '16000',
       '-c', '1',
       '-b', '16',
       this.tmpWav,
-      'silence', '1', '0.5', '1%',   // wait for speech to start
-      '1', '3.0', '1%',              // stop after 3s of silence (long pause = done)
-      'trim', '0', String(maxSec),   // hard cap at 60s
+      'trim', '0', String(maxSec),
     ]);
 
     this.soxProcess.on('error', (err) => {

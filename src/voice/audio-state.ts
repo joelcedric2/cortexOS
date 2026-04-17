@@ -13,12 +13,17 @@ export interface AudioStateEvent {
   ts: Date;
 }
 
+// Allow any→any transitions. The voice orchestrator manages the actual
+// flow logic; the state machine just tracks + broadcasts current state.
+// Strict transitions caused crashes on valid flows (speaking→thinking
+// after ack, idle→speaking for greeting, etc.).
+const ALL_STATES: AudioState[] = ['idle', 'listening', 'thinking', 'speaking', 'error'];
 const VALID_TRANSITIONS: Record<AudioState, ReadonlyArray<AudioState>> = {
-  idle:      ['listening', 'speaking', 'error'],
-  listening: ['thinking', 'idle', 'error'],
-  thinking:  ['speaking', 'idle', 'error'],
-  speaking:  ['idle', 'listening', 'error'],
-  error:     ['idle'],
+  idle:      ALL_STATES,
+  listening: ALL_STATES,
+  thinking:  ALL_STATES,
+  speaking:  ALL_STATES,
+  error:     ALL_STATES,
 };
 
 export class AudioStateMachine {
