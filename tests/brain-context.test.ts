@@ -63,19 +63,15 @@ describe("buildBrainClaudeMd", () => {
     );
   });
 
-  it("includes tool usage rules with date and NEVER guess", async () => {
+  it("includes tool usage section that encourages using tools", async () => {
     const md = await buildBrainClaudeMd({ soulPath });
     assert.ok(
-      md.includes("run `date`"),
-      "Missing 'run `date`' in tool usage rules",
+      md.includes("## Tool Usage"),
+      "Missing Tool Usage section",
     );
     assert.ok(
-      md.includes("NEVER guess"),
-      "Missing 'NEVER guess' in tool usage rules",
-    );
-    assert.ok(
-      md.includes("USE TOOLS BEFORE GUESSING"),
-      "Missing tool usage header",
+      md.includes("Never guess"),
+      "Missing guidance to use tools over guessing",
     );
   });
 

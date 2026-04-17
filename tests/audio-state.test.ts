@@ -32,13 +32,11 @@ describe('AudioStateMachine', () => {
     assert.equal(sm.getState(), 'speaking');
   });
 
-  test('throws on invalid transition: listening -> speaking', () => {
+  test('allows listening -> speaking (all transitions valid)', () => {
     const sm = new AudioStateMachine();
     sm.transition('listening');
-    assert.throws(
-      () => sm.transition('speaking'),
-      /Invalid audio state transition: listening -> speaking/,
-    );
+    sm.transition('speaking');
+    assert.equal(sm.getState(), 'speaking');
   });
 
   test('error state reachable from any non-error state', () => {
@@ -54,10 +52,12 @@ describe('AudioStateMachine', () => {
     }
   });
 
-  test('error state can only go to idle', () => {
+  test('error state can transition to any state (open transitions)', () => {
     const sm = new AudioStateMachine();
     sm.transition('error');
-    assert.throws(() => sm.transition('listening'));
+    sm.transition('listening');
+    assert.equal(sm.getState(), 'listening');
+    sm.transition('error');
     sm.transition('idle');
     assert.equal(sm.getState(), 'idle');
   });

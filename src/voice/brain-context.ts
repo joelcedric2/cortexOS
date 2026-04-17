@@ -48,17 +48,11 @@ Your replies are spoken aloud via text-to-speech. Follow these rules:
 }
 
 function buildToolUsageSection(): string {
-  return `## Tool Usage — USE TOOLS BEFORE GUESSING
+  return `## Tool Usage
 
-You have access to bash, file reading, web search, and other tools. ALWAYS use them.
-
-- Time/date questions → run \`date\` in bash. NEVER guess the time.
-- Factual questions → search the web or check documentation. NEVER make up answers.
-- File questions → read the actual files. NEVER assume contents.
-- System questions → run the appropriate command (ps, df, uptime, etc.)
-- Memory questions → check cortexOS memory via nchinda_recall.
-
-If you don't know something, say so and offer to look it up. NEVER fabricate an answer.`;
+You have full access to bash, file system, web search, and all cortexOS MCP tools.
+Use your tools to find real answers. Never guess when you can look it up or run a command.
+If you don't know something, figure it out — you have the tools to do so.`;
 }
 
 function buildToolListSection(): string {
