@@ -1,9 +1,9 @@
 /**
- * Speech-to-text via whisper CLI (whisper.cpp).
+ * Speech-to-text via Groq cloud API (whisper-large-v3-turbo).
  *
- * Records audio to a temp WAV via sox, then shells out to `whisper`
- * for transcription. Falls back to a placeholder if whisper is not
- * installed. Partial callback fires every 2s with latest chunk.
+ * Records audio to a temp WAV via sox, then sends to Groq's API
+ * for transcription. Requires GROQ_API_KEY env var.
+ * Partial callback fires every 2s with latest chunk.
  */
 
 import { execFile, type ChildProcess } from 'node:child_process';
@@ -41,7 +41,7 @@ export class SpeechToText {
   private partialTimer: ReturnType<typeof setInterval> | null = null;
   private recordingStartedAt = 0;
 
-  // Test hook: when set, startRecording/stopRecording skip sox/whisper and
+  // Test hook: when set, startRecording/stopRecording skip sox/Groq and
   // resolve stopRecording with this transcript instead.
   private _testTranscript: string | null = null;
 
@@ -106,7 +106,7 @@ export class SpeechToText {
 
     // When sox exits (fixed-duration trim complete), mark recording as done.
     // The orchestrator's waitForTranscript() polls isRecording() and will
-    // call stopRecording() to run whisper.
+    // call stopRecording() to run Groq transcription.
     this.soxProcess.on('exit', () => {
       clearTimeout(timeout);
       console.log("[stt] sox finished recording");
@@ -165,7 +165,7 @@ export class SpeechToText {
 
     console.log(`[stt] transcribing ${this.tmpWav}...`);
     const transcript = await this.transcribe(this.tmpWav);
-    console.log(`[stt] whisper result: "${transcript}"`);
+    console.log(`[stt] groq result: "${transcript}"`);
 
     // Clean up
     await unlink(this.tmpWav).catch(() => {});
@@ -181,10 +181,10 @@ export class SpeechToText {
 
   private async transcribe(wavPath: string): Promise<string> {
     try {
-      const { transcribeWithGroq } = await import("./groq-stt.js");
+      const { transcribeWithGroq, GROQ_MODEL_ACCURATE } = await import("./groq-stt.js");
       const result = await transcribeWithGroq(wavPath, {
         language: this.language,
-        timeoutMs: 15_000,
+        timeoutMs: 15_000, model: GROQ_MODEL_ACCURATE,
       });
       return result.text || "";
     } catch (err) {

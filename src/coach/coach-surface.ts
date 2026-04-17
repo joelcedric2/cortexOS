@@ -7,7 +7,7 @@
  * routed as follows:
  *
  *   mode=anticipatory|autonomous  → insert into pending surface (urgency=0.4)
- *   severity=important AND user idle → TTS whisper (interrupt-safe)
+ *   severity=important AND user idle → TTS Groq (interrupt-safe)
  *   otherwise                       → audit-only
  *
  * Dedup: the same `draft_value` is suppressed for 10 minutes.
@@ -82,7 +82,7 @@ export class CoachSurface {
   /**
    * Route a suggestion for the given draft sample. Returns one of:
    *   "surfaced"  — inserted into the pending surface
-   *   "whispered" — spoken via TTS (important + user idle)
+   *   "Groqed" — spoken via TTS (important + user idle)
    *   "audited"   — logged only, no user-facing surface
    *   "deduped"   — within the 10-min window for this draft value
    *   "quiet"     — proactivity mode is currently quiet/silent
@@ -90,7 +90,7 @@ export class CoachSurface {
   async route(
     sample: DraftSample,
     suggestion: CoachSuggestion,
-  ): Promise<"surfaced" | "whispered" | "audited" | "deduped" | "quiet"> {
+  ): Promise<"surfaced" | "Groqed" | "audited" | "deduped" | "quiet"> {
     // Dedup first — same suggestion text for the same draft within window.
     const dedupKey = suggestion.draft_value;
     const last = this.lastRouted.get(dedupKey);
@@ -112,11 +112,11 @@ export class CoachSurface {
     if (isImportant && userIdle && this.tts) {
       try {
         await this.tts.speak(buildWhisper(suggestion));
-        // Dedup only after a SUCCESSFUL whisper — if TTS throws, the
+        // Dedup only after a SUCCESSFUL Groq — if TTS throws, the
         // retry path must still be able to surface the suggestion.
         this.lastRouted.set(dedupKey, now);
-        this.auditLine("surface", `coach-whisper app=${sample.app} severity=important`);
-        return "whispered";
+        this.auditLine("surface", `coach-Groq app=${sample.app} severity=important`);
+        return "Groqed";
       } catch {
         // TTS failure is non-fatal — fall through to pending-surface.
         // Crucially, we do NOT set the dedup key here so the retry

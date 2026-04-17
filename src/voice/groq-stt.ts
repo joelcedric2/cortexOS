@@ -11,7 +11,9 @@
 import { readFileSync } from "node:fs";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
-const MODEL = "whisper-large-v3-turbo";
+/** turbo for wake-word speed; full for command accuracy */
+export const GROQ_MODEL_FAST = "whisper-large-v3-turbo";
+export const GROQ_MODEL_ACCURATE = "whisper-large-v3";
 
 export interface GroqTranscription {
   text: string;
@@ -20,7 +22,7 @@ export interface GroqTranscription {
 
 export async function transcribeWithGroq(
   wavPath: string,
-  opts?: { apiKey?: string; language?: string; timeoutMs?: number },
+  opts?: { apiKey?: string; language?: string; timeoutMs?: number; model?: string },
 ): Promise<GroqTranscription> {
   const apiKey = opts?.apiKey ?? process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -28,6 +30,7 @@ export async function transcribeWithGroq(
   }
 
   const audioData = readFileSync(wavPath);
+  const model = opts?.model ?? GROQ_MODEL_FAST;
   const boundary = `----boundary${Date.now()}`;
 
   // Build multipart form data manually (no deps)
@@ -42,7 +45,7 @@ export async function transcribeWithGroq(
 
   // model field
   parts.push(Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${MODEL}\r\n`,
+    `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`,
   ));
 
   // language field

@@ -2,27 +2,24 @@
  * Wake-word detector — always listening, only fires on "Nchinda".
  *
  * Records rolling 3-second audio chunks via sox, transcribes each with
- * whisper-cli, and checks the transcript for the keyword. When the
+ * Groq cloud STT, and checks the transcript for the keyword. When the
  * keyword is detected, fires the onWake callback.
  *
  * This runs continuously whenever cortexOS is up. The mic is always on.
  * Only the keyword triggers action — ambient noise is ignored.
  */
-
 import { execFile, type ChildProcess } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { transcribeWithGroq } from "./groq-stt.js";
-
 export interface WakeWordOptions {
   keyword?: string;
   chunkSec?: number;          // recording chunk duration, default 3
   onWake: () => void;
   onRmsUpdate?: (rms: number) => void;
 }
-
 function execFileAsync(
   cmd: string,
   args: string[],
@@ -35,41 +32,33 @@ function execFileAsync(
     });
   });
 }
-
 function commandExists(cmd: string): Promise<boolean> {
   return new Promise((resolve) => {
     execFile("which", [cmd], (err) => resolve(!err));
   });
 }
-
 export class WakeWordDetector {
   readonly keyword: string;
   private readonly chunkSec: number;
   private onWake: () => void;
   private readonly onRmsUpdate?: (rms: number) => void;
-
   private listening = false;
   private soxProcess: ChildProcess | null = null;
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
-
   constructor(opts: WakeWordOptions) {
     this.keyword = (opts.keyword ?? "nchinda").toLowerCase();
     this.chunkSec = opts.chunkSec ?? 3;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
   }
-
   setOnWake(fn: () => void): void {
     this.onWake = fn;
   }
-
   _simulateWake(): void {
     this.onWake();
   }
-
   async start(): Promise<void> {
     if (this.listening) return;
-
     const soxOk = await commandExists("sox");
     if (!soxOk) {
       console.warn("[wake-word] sox not found — wake detection disabled");
@@ -79,12 +68,10 @@ export class WakeWordDetector {
       console.warn("[wake-word] GROQ_API_KEY not set — wake detection disabled");
       return;
     }
-
     this.listening = true;
     console.log(`[wake-word] Listening for "${this.keyword}"...`);
     this.listenLoop();
   }
-
   stop(): void {
     this.listening = false;
     if (this.loopTimer) {
@@ -96,11 +83,9 @@ export class WakeWordDetector {
       this.soxProcess = null;
     }
   }
-
   isListening(): boolean {
     return this.listening;
   }
-
   private async listenLoop(): Promise<void> {
     while (this.listening) {
       try {
@@ -113,7 +98,7 @@ export class WakeWordDetector {
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch (err) {
-        // Sox or whisper error — wait 1s then retry
+        // Sox or Groq error — wait 1s then retry
         const msg = err instanceof Error ? err.message : String(err);
         if (this.listening) {
           console.warn(`[wake-word] error: ${msg} — retrying in 1s`);
@@ -122,34 +107,27 @@ export class WakeWordDetector {
       }
     }
   }
-
   private async captureAndCheck(): Promise<boolean> {
     const tmpWav = join(tmpdir(), `wake-${randomUUID()}.wav`);
-
     try {
-      // Record a short chunk with gain boost — laptop mics often have
-      // very low input levels that whisper can't hear without amplification.
+      // Record a short chunk for keyword detection
+      // 
       await execFileAsync("sox", [
         "-d",
         "-r", "16000",
         "-c", "1",
         "-b", "16",
         tmpWav,
-        // no gain — mic is fine, model was too small
         "trim", "0", String(this.chunkSec),
       ], (this.chunkSec + 5) * 1000);
-
       if (!this.listening) return false;
-
       // Transcribe with Groq (whisper-large-v3-turbo, free, ~0.3s)
       const result = await transcribeWithGroq(tmpWav, { timeoutMs: 8_000 });
       const transcript = result.text.toLowerCase().trim();
-
       if (transcript) {
         console.log(`[wake-word] heard: "${transcript}"`);
       }
-
-      // Match real variants whisper produces — but NOT loose substrings
+      // Match real variants Groq produces — but NOT loose substrings
       // like "chinda" alone (catches "chindang", keyboard noise artifacts).
       const hasKeyword =
         transcript.includes("nchinda") ||
@@ -160,9 +138,7 @@ export class WakeWordDetector {
         transcript.includes("hey chinda") ||
         transcript.includes("and jinda") ||
         /\benchinda\b/.test(transcript);
-
       this.onRmsUpdate?.(hasKeyword ? 0.8 : 0.05);
-
       return hasKeyword;
     } finally {
       await unlink(tmpWav).catch(() => {});

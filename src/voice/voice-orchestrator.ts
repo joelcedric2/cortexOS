@@ -229,7 +229,7 @@ export class VoiceOrchestrator {
       await this.stt.startRecording();
 
       // 4. Wait for sox to finish (silence detected) → auto-calls stopRecording
-      //    which transcribes via whisper-cli. We poll until recording is done.
+      //    which transcribes via Groq. We poll until recording is done.
       const transcript = await this.waitForTranscript();
 
       if (this.isStale(gen)) return;
