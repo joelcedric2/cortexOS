@@ -91,7 +91,7 @@ export class CortexController {
    * handler is used as a fallback.
    */
   private voiceRunFactory: ((transcript: string) => Promise<string>) | null = null;
-  // Phase 6 — UI surface. Both start behind CORTEXOS_UI=on.
+  // Phase 6 — UI surface. On by default; disable with CORTEXOS_UI=off.
   private eventWSBridge: EventWSBridge | null = null;
   private uiApi: UIApiServer | null = null;
   private agentRegistry: AgentRegistry | null = null;
@@ -162,8 +162,8 @@ export class CortexController {
       console.warn(`[CortexOS] Hooks server failed to start: ${message}`);
     }
 
-    // Boot scheduler behind a feature flag — see docs/phase-1.5/DECISIONS.md.
-    if (process.env.CORTEXOS_SCHEDULER === "on") {
+    // Scheduler — on by default; disable with CORTEXOS_SCHEDULER=off.
+    if (process.env.CORTEXOS_SCHEDULER !== "off") {
       try {
         this.cronDb = new CronJobsDB();
         const run: SchedulerRun = this.schedulerRunFactory
@@ -182,8 +182,8 @@ export class CortexController {
       }
     }
 
-    // Boot voice subsystem behind CORTEXOS_VOICE=on flag.
-    if (process.env.CORTEXOS_VOICE === "on") {
+    // Voice subsystem — on by default; disable with CORTEXOS_VOICE=off.
+    if (process.env.CORTEXOS_VOICE !== "off") {
       try {
         this.voiceStateMachine = new AudioStateMachine();
         // Wake-word + STT + TTS constructed lazily here; callbacks wired by the
@@ -224,10 +224,10 @@ export class CortexController {
       }
     }
 
-    // Boot UI surface (event WS bridge + HTTP API) behind CORTEXOS_UI=on.
+    // UI surface (event WS bridge + HTTP API) — on by default.
     // Created additively here so tests + the CLI don't pay the cost of
     // opening two more ports unless the dashboard is actually wanted.
-    if (process.env.CORTEXOS_UI === "on") {
+    if (process.env.CORTEXOS_UI !== "off") {
       try {
         this.agentRegistry = new AgentRegistry();
         this.escalationsDb = new EscalationsDB();
