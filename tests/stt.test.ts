@@ -65,10 +65,10 @@ describe('SpeechToText', () => {
     assert.equal(stt.isRecording(), false);
   });
 
-  test('default model is base.en', () => {
+  test('default language is en', () => {
     const stt = new SpeechToText({});
     // @ts-expect-error accessing private for test
-    assert.equal(stt.model, 'base.en');
+    assert.equal(stt.language, 'en');
   });
 
   test('default language is en', () => {
@@ -85,12 +85,12 @@ describe('SpeechToText', () => {
 
   test('custom options are stored', () => {
     const stt = new SpeechToText({
-      model: 'large-v2',
+      language: 'fr',
       language: 'fr',
       timeoutMs: 60_000,
     });
     // @ts-expect-error accessing private for test
-    assert.equal(stt.model, 'large-v2');
+    assert.equal(stt.language, 'fr');
     // @ts-expect-error accessing private for test
     assert.equal(stt.language, 'fr');
     // @ts-expect-error accessing private for test

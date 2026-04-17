@@ -8,8 +8,8 @@ describe("TextToSpeech (Edge TTS)", () => {
     assert.equal(tts.isSpeaking(), false);
   });
 
-  test("default voice is Andrew (warm, confident)", () => {
-    assert.equal(DEFAULT_VOICE, "en-US-AndrewMultilingualNeural");
+  test("default voice is Ryan (deep, confident, British)", () => {
+    assert.equal(DEFAULT_VOICE, "en-GB-RyanNeural");
   });
 
   test("speak with empty text is a no-op", async () => {

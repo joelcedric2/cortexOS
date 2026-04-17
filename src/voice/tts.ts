@@ -22,8 +22,8 @@ export interface TTSOptions {
   onRmsUpdate?: (rms: number) => void;
 }
 
-/** Nchinda's default voice — warm, confident, authentic. */
-export const DEFAULT_VOICE = "en-US-AndrewMultilingualNeural";
+/** Nchinda's default voice — deep, confident, slight British accent. */
+export const DEFAULT_VOICE = "en-GB-RyanNeural";
 
 function execFileAsync(
   cmd: string,

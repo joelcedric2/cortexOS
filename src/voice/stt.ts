@@ -7,7 +7,7 @@
  */
 
 import { execFile, type ChildProcess } from 'node:child_process';
-import { readFile, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -47,7 +47,6 @@ function execFileAsync(
 }
 
 export class SpeechToText {
-  private readonly model: string;
   private readonly language: string;
   private readonly onPartial?: (text: string) => void;
   private readonly onFinal?: (text: string) => void;
@@ -64,7 +63,6 @@ export class SpeechToText {
   private _testTranscript: string | null = null;
 
   constructor(opts: STTOptions) {
-    this.model = opts.model ?? 'base.en';
     this.language = opts.language ?? 'en';
     this.onPartial = opts.onPartial;
     this.onFinal = opts.onFinal;
@@ -180,40 +178,45 @@ export class SpeechToText {
   }
 
   private async transcribe(wavPath: string): Promise<string> {
-    const whisperAvailable = await commandExists('whisper');
+    // whisper.cpp installs as `whisper-cli` via brew, not `whisper`
+    const whisperBin = process.env.WHISPER_CLI_PATH ?? "whisper-cli";
+    const modelPath = process.env.WHISPER_MODEL_PATH
+      ?? `${process.env.HOME}/.cortexos/models/ggml-base.en.bin`;
+
+    const whisperAvailable = await commandExists(whisperBin);
 
     if (!whisperAvailable) {
       console.warn(
-        '[stt] whisper CLI not found. Returning placeholder transcript.',
+        `[stt] ${whisperBin} not found. Install: brew install whisper-cpp`,
       );
-      return '[whisper not installed — transcript unavailable]';
+      return "[whisper not installed — transcript unavailable]";
     }
 
-    const outputBase = wavPath.replace(/\.wav$/, '');
-
     try {
-      await execFileAsync(
-        'whisper',
+      // whisper-cli outputs to stdout with --output-txt --no-timestamps
+      const { stdout } = await execFileAsync(
+        whisperBin,
         [
-          wavPath,
-          '--model', this.model,
-          '--language', this.language,
-          '--output_format', 'txt',
-          '--output_dir', tmpdir(),
+          "--model", modelPath,
+          "--language", this.language,
+          "--no-timestamps",
+          "--file", wavPath,
         ],
-        60_000, // 60s timeout for transcription
+        60_000,
       );
 
-      // Whisper outputs <basename>.txt
-      const txtPath = `${outputBase}.txt`;
-      const text = await readFile(txtPath, 'utf-8').catch(() => '');
-      await unlink(txtPath).catch(() => {});
+      // whisper-cli prints the transcript to stdout directly
+      const text = stdout
+        .split("\n")
+        .filter((line) => !line.startsWith("[") && line.trim())
+        .join(" ")
+        .trim();
 
-      return text.trim();
+      return text || "[empty transcript]";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('[stt] Whisper transcription failed:', message);
-      return '[transcription failed]';
+      console.error("[stt] Whisper transcription failed:", message);
+      return "[transcription failed]";
     }
   }
 }
