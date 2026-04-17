@@ -14,11 +14,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { transcribeWithGroq } from "./groq-stt.js";
+import type { EchoGate } from "./echo-gate.js";
 export interface WakeWordOptions {
   keyword?: string;
   chunkSec?: number;          // recording chunk duration, default 3
   onWake: () => void;
   onRmsUpdate?: (rms: number) => void;
+  /** When supplied, captureAndCheck skips Groq transcription while muted. */
+  echoGate?: EchoGate;
 }
 function execFileAsync(
   cmd: string,
@@ -42,6 +45,7 @@ export class WakeWordDetector {
   private readonly chunkSec: number;
   private onWake: () => void;
   private readonly onRmsUpdate?: (rms: number) => void;
+  private readonly echoGate?: EchoGate;
   private listening = false;
   private soxProcess: ChildProcess | null = null;
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,6 +54,7 @@ export class WakeWordDetector {
     this.chunkSec = opts.chunkSec ?? 3;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
+    this.echoGate = opts.echoGate;
   }
   setOnWake(fn: () => void): void {
     this.onWake = fn;
@@ -121,6 +126,12 @@ export class WakeWordDetector {
         "trim", "0", String(this.chunkSec),
       ], (this.chunkSec + 5) * 1000);
       if (!this.listening) return false;
+      // Echo gate: if TTS is playing (or echo is decaying), skip
+      // transcription entirely — just discard the recorded audio.
+      // This prevents Nchinda's own voice from triggering false wakes.
+      if (this.echoGate?.isMuted()) {
+        return false;
+      }
       // Transcribe with Groq (whisper-large-v3-turbo, free, ~0.3s)
       const result = await transcribeWithGroq(tmpWav, { timeoutMs: 8_000 });
       const transcript = result.text.toLowerCase().trim();
