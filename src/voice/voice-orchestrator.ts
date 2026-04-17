@@ -237,19 +237,15 @@ export class VoiceOrchestrator {
       if (!transcript.trim() || transcript.includes("[") || transcript.length < 3) {
         // Empty or placeholder transcript — go back to idle.
         // Wait 2s cooldown before re-enabling wake to prevent rapid cycling.
-        console.log("[VoiceOrchestrator] No speech detected — idle (2s cooldown)");
-        this.sm.transition("idle");
-        await this.delay(2000);
-        this.wakeWord.setOnWake(() => this.handleWake());
-        this.wakeWord.start().catch(() => {});
+        console.log("[VoiceOrchestrator] No speech detected — idle");
+        this.sm.transition("idle"); await this.rearmWakeWord();
         return;
       }
 
       console.log(`[VoiceOrchestrator] Transcript: "${transcript}"`);
 
-      // 5. RESUME the wake-word detector for the next interaction.
-      this.wakeWord.setOnWake(() => this.handleWake());
-      this.wakeWord.start().catch(() => {});
+      // Wake-word stays OFF until after TTS reply finishes — prevents
+      // Nchinda from hearing its own voice through the speakers.
 
       // 3.5. Phase 8.5 — classify the transcript. Orchestrator-level intents
       // (kill / pause / resume / config) short-circuit the normal task
@@ -273,7 +269,7 @@ export class VoiceOrchestrator {
         // Skip onTask; go back to idle so the mic does not immediately
         // re-engage.
         try {
-          this.sm.transition("idle");
+          this.sm.transition("idle"); await this.rearmWakeWord();
         } catch {
           // State machine may reject if already idle — safe to ignore.
         }
@@ -311,7 +307,7 @@ export class VoiceOrchestrator {
         this.sm.transition("speaking");
         await this.tts.speak(reply);
         if (this.isStale(gen)) return;
-        this.sm.transition("idle");
+        this.sm.transition("idle"); await this.rearmWakeWord();
         return;
       }
 
@@ -340,7 +336,7 @@ export class VoiceOrchestrator {
         this.sm.transition("speaking");
         await this.tts.speak(reply);
         if (this.isStale(gen)) return;
-        this.sm.transition("idle");
+        this.sm.transition("idle"); await this.rearmWakeWord();
         return;
       }
 
@@ -369,7 +365,7 @@ export class VoiceOrchestrator {
       if (this.isStale(gen)) return;
 
       // 9. Back to idle.
-      this.sm.transition("idle");
+      this.sm.transition("idle"); await this.rearmWakeWord();
     } catch (err) {
       if (this.isStale(gen)) return;
 
@@ -385,7 +381,7 @@ export class VoiceOrchestrator {
       await this.delay(ERROR_RECOVERY_MS);
       if (this.isStale(gen)) return;
       try {
-        this.sm.transition("idle");
+        this.sm.transition("idle"); await this.rearmWakeWord();
       } catch {
         // Best-effort recovery.
       }
@@ -394,6 +390,19 @@ export class VoiceOrchestrator {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Re-arm the wake-word detector after TTS finishes speaking.
+   * Waits 2s for echo to decay so the mic doesn't pick up Nchinda's
+   * own voice from the speakers.
+   */
+  private async rearmWakeWord(): Promise<void> {
+    console.log("[VoiceOrchestrator] Waiting 2s for echo to decay...");
+    await this.delay(2000);
+    this.wakeWord.setOnWake(() => this.handleWake());
+    await this.wakeWord.start().catch(() => {});
+    console.log("[VoiceOrchestrator] Ready — say 'Nchinda' to continue");
   }
 
   /**
