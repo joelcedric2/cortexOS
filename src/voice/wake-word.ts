@@ -158,11 +158,28 @@ export class WakeWordDetector {
         "--file", tmpWav,
       ], 15_000);
 
-      // Check for keyword in transcript
-      const transcript = stdout.toLowerCase();
-      const hasKeyword = transcript.includes(this.keyword);
+      // Check for keyword in transcript — fuzzy match because whisper
+      // may transcribe "Nchinda" as "Enchinda", "N'Chinda", "in Chinda", etc.
+      const transcript = stdout
+        .split("\n")
+        .filter((l) => !l.startsWith("[") && l.trim())
+        .join(" ")
+        .toLowerCase()
+        .trim();
 
-      // Feed RMS-like signal to the waveform (1 if keyword, 0.1 otherwise)
+      if (transcript && transcript !== "[blank_audio]" && !transcript.startsWith("[music")) {
+        console.log(`[wake-word] heard: "${transcript}"`);
+      }
+
+      const hasKeyword =
+        transcript.includes("nchinda") ||
+        transcript.includes("enchinda") ||
+        transcript.includes("chinda") ||
+        transcript.includes("n'chinda") ||
+        transcript.includes("in chinda") ||
+        transcript.includes("and chinda") ||
+        transcript.includes("hey chinda");
+
       this.onRmsUpdate?.(hasKeyword ? 0.8 : 0.05);
 
       return hasKeyword;
