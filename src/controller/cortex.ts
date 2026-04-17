@@ -200,41 +200,47 @@ export class CortexController {
           this.voiceRunFactory
             ? this.voiceRunFactory
             : async (transcript) => {
-                // Default handler: call Claude Sonnet directly for a conversational reply.
-                // When the full AutonomyLoop factory is wired, this path is bypassed.
-                console.log(`[Nchinda] Processing: "${transcript}"`);
+                // Default handler: run the transcript through Claude Code CLI.
+                // This is the whole point of cortexOS — Claude Code has tools,
+                // file access, web, MCP servers, everything. A raw API call
+                // would be a lobotomy.
+                console.log(`[Nchinda] Processing via Claude CLI: "${transcript}"`);
                 try {
-                  const apiKey = process.env.ANTHROPIC_API_KEY;
-                  if (!apiKey) {
-                    return "I heard you, but I need an Anthropic API key to think. Add it to ~/.cortexos/config.json under keys.ANTHROPIC_API_KEY.";
-                  }
-                  const res = await fetch("https://api.anthropic.com/v1/messages", {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "x-api-key": apiKey,
-                      "anthropic-version": "2023-06-01",
-                    },
-                    body: JSON.stringify({
-                      model: "claude-sonnet-4-6",
-                      max_tokens: 300,
-                      system: "You are Nchinda, a personal AI assistant. Be concise, warm, and direct. Reply in 1-3 sentences suitable for text-to-speech.",
-                      messages: [{ role: "user", content: transcript }],
-                    }),
+                  const { execFile: ef } = await import("node:child_process");
+                  const { promisify } = await import("node:util");
+                  const execFileAsync = promisify(ef);
+
+                  // claude -p runs non-interactive: takes a prompt, thinks,
+                  // returns the response on stdout, exits. Perfect for voice.
+                  const { stdout } = await execFileAsync("claude", [
+                    "-p", transcript,
+                    "--output-format", "text",
+                  ], {
+                    timeout: 120_000, // 2 min max for complex tasks
+                    maxBuffer: 1024 * 1024,
+                    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cortexos-voice" },
                   });
-                  if (!res.ok) {
-                    const err = await res.text().catch(() => "");
-                    console.error(`[Nchinda] API error ${res.status}: ${err.slice(0, 100)}`);
-                    return "I had trouble thinking about that. Could you try again?";
-                  }
-                  const json = await res.json() as { content?: Array<{ text?: string }> };
-                  const reply = json.content?.[0]?.text ?? "I'm not sure how to respond to that.";
-                  console.log(`[Nchinda] Reply: "${reply}"`);
-                  return reply;
+
+                  const reply = stdout.trim();
+                  if (!reply) return "I processed that but got no response. Try rephrasing.";
+
+                  // For TTS, truncate very long replies to first 500 chars
+                  const spoken = reply.length > 500
+                    ? reply.slice(0, 500) + "... I've put the full response in the activity journal."
+                    : reply;
+
+                  console.log(`[Nchinda] Reply (${reply.length} chars): "${spoken.slice(0, 100)}..."`);
+                  return spoken;
                 } catch (err) {
                   const msg = err instanceof Error ? err.message : String(err);
-                  console.error(`[Nchinda] Error: ${msg}`);
-                  return "Something went wrong while I was thinking. Try again.";
+                  console.error(`[Nchinda] Claude CLI error: ${msg}`);
+                  if (msg.includes("ENOENT")) {
+                    return "I can't find the Claude CLI. Make sure 'claude' is on your PATH.";
+                  }
+                  if (msg.includes("TIMEOUT")) {
+                    return "That task took too long. I'll need to handle it differently — try breaking it down.";
+                  }
+                  return "Something went wrong while I was working on that. Try again.";
                 }
               };
 

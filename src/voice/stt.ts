@@ -33,7 +33,7 @@ export class SpeechToText {
   private readonly language: string;
   private readonly onPartial?: (text: string) => void;
   private readonly onFinal?: (text: string) => void;
-  private readonly timeoutMs: number;
+  
 
   private recording = false;
   private soxProcess: ChildProcess | null = null;
@@ -49,7 +49,6 @@ export class SpeechToText {
     this.language = opts.language ?? 'en';
     this.onPartial = opts.onPartial;
     this.onFinal = opts.onFinal;
-    this.timeoutMs = opts.timeoutMs ?? 8_000;
   }
 
   /** Test hook: resolve the next stopRecording() with `transcript` synchronously. */
