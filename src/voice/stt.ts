@@ -74,21 +74,26 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
-    // Record for a fixed duration. Silence detection via sox's `silence`
-    // effect was too unreliable on laptop mics (ambient noise triggered
-    // false starts, or sox exited immediately). Instead: record for a
-    // fixed window (default 8s) then transcribe whatever was captured.
-    // The user gets a clear "speak now" prompt and a defined window.
-    const recordSec = Math.min(Math.floor(this.timeoutMs / 1000), 15);
-    console.log(`[stt] Recording for ${recordSec}s — speak now`);
+    // Record up to 60s — sox runs with silence detection that ONLY stops
+    // after the user finishes a long instruction (3s of silence after speech).
+    // Groq's whisper-large-v3 handles the transcription accuracy; sox just
+    // needs to capture cleanly and stop when the user is done talking.
+    //
+    // The `silence` effect here works because Groq (not local whisper) does
+    // the transcription — we don't need the audio to be clean, just captured.
+    // 1 0.5 1% = start recording after 0.5s of sound above 1%
+    // 1 3.0 1% = stop after 3 seconds of silence below 1%
+    const maxSec = 60;
+    console.log("[stt] Listening... (speak now, 3s silence to finish)");
     this.soxProcess = execFile('sox', [
-      '-d',           // default audio device
+      '-d',
       '-r', '16000',
-      '-c', '1',      // mono
+      '-c', '1',
       '-b', '16',
       this.tmpWav,
-      // no gain — mic is fine, model was too small
-      'trim', '0', String(recordSec),   // fixed duration recording
+      'silence', '1', '0.5', '1%',   // wait for speech to start
+      '1', '3.0', '1%',              // stop after 3s of silence (long pause = done)
+      'trim', '0', String(maxSec),   // hard cap at 60s
     ]);
 
     this.soxProcess.on('error', (err) => {
@@ -96,20 +101,18 @@ export class SpeechToText {
       this.recording = false;
     });
 
-    // Safety timeout — in case silence detection never triggers
+    // Safety timeout at 65s
     const timeout = setTimeout(() => {
       if (this.recording) {
-        console.log('[stt] recording timeout — stopping');
-        void this.stopRecording();
+        console.log('[stt] recording timeout (60s) — stopping');
+        this.recording = false;
       }
-    }, this.timeoutMs);
+    }, 65_000);
 
-    // When sox exits (fixed-duration trim complete), mark recording as done.
-    // The orchestrator's waitForTranscript() polls isRecording() and will
-    // call stopRecording() to run Groq transcription.
+    // When sox exits (silence detected or max duration), mark done.
     this.soxProcess.on('exit', () => {
       clearTimeout(timeout);
-      console.log("[stt] sox finished recording");
+      console.log("[stt] sox finished recording (silence detected or max reached)");
       this.recording = false;
     });
 

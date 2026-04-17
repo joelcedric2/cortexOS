@@ -200,10 +200,42 @@ export class CortexController {
           this.voiceRunFactory
             ? this.voiceRunFactory
             : async (transcript) => {
-                console.warn(
-                  `[CortexOS] Voice task received but no run factory is set — echoing. Transcript: ${transcript}`,
-                );
-                return `Received: ${transcript}`;
+                // Default handler: call Claude Sonnet directly for a conversational reply.
+                // When the full AutonomyLoop factory is wired, this path is bypassed.
+                console.log(`[Nchinda] Processing: "${transcript}"`);
+                try {
+                  const apiKey = process.env.ANTHROPIC_API_KEY;
+                  if (!apiKey) {
+                    return "I heard you, but I need an Anthropic API key to think. Add it to ~/.cortexos/config.json under keys.ANTHROPIC_API_KEY.";
+                  }
+                  const res = await fetch("https://api.anthropic.com/v1/messages", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-api-key": apiKey,
+                      "anthropic-version": "2023-06-01",
+                    },
+                    body: JSON.stringify({
+                      model: "claude-sonnet-4-6",
+                      max_tokens: 300,
+                      system: "You are Nchinda, a personal AI assistant. Be concise, warm, and direct. Reply in 1-3 sentences suitable for text-to-speech.",
+                      messages: [{ role: "user", content: transcript }],
+                    }),
+                  });
+                  if (!res.ok) {
+                    const err = await res.text().catch(() => "");
+                    console.error(`[Nchinda] API error ${res.status}: ${err.slice(0, 100)}`);
+                    return "I had trouble thinking about that. Could you try again?";
+                  }
+                  const json = await res.json() as { content?: Array<{ text?: string }> };
+                  const reply = json.content?.[0]?.text ?? "I'm not sure how to respond to that.";
+                  console.log(`[Nchinda] Reply: "${reply}"`);
+                  return reply;
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  console.error(`[Nchinda] Error: ${msg}`);
+                  return "Something went wrong while I was thinking. Try again.";
+                }
               };
 
         this.voiceOrchestrator = new VoiceOrchestrator({

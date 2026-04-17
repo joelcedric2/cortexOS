@@ -357,15 +357,18 @@ export class VoiceOrchestrator {
       const reply = await this.onTask(transcript);
       if (this.isStale(gen)) return;
 
-      // 7. Transition to speaking.
+      // 7. Transition to speaking — re-arm wake-word FIRST so the user
+      //    can interrupt by saying "Nchinda" or "stop" during TTS playback.
       this.sm.transition("speaking");
+      await this.rearmWakeWord();
 
-      // 8. TTS speaks the reply.
+      // 8. TTS speaks the reply. If the user interrupts (handleWake fires),
+      //    the generation bumps and isStale returns true after speak resolves.
       await this.tts.speak(reply);
       if (this.isStale(gen)) return;
 
-      // 9. Back to idle.
-      this.sm.transition("idle"); await this.rearmWakeWord();
+      // 9. Back to idle — wake-word already running from step 7.
+      this.sm.transition("idle");
     } catch (err) {
       if (this.isStale(gen)) return;
 
@@ -393,16 +396,15 @@ export class VoiceOrchestrator {
   }
 
   /**
-   * Re-arm the wake-word detector after TTS finishes speaking.
-   * Waits 2s for echo to decay so the mic doesn't pick up Nchinda's
-   * own voice from the speakers.
+   * Re-arm the wake-word detector. No echo delay — the user should be
+   * able to interrupt Nchinda at any time by saying "Nchinda" or "stop".
+   * Echo is handled by Groq's large-v3 model which is smart enough to
+   * distinguish real wake words from TTS playback artifacts.
    */
   private async rearmWakeWord(): Promise<void> {
-    console.log("[VoiceOrchestrator] Waiting 2s for echo to decay...");
-    await this.delay(2000);
     this.wakeWord.setOnWake(() => this.handleWake());
     await this.wakeWord.start().catch(() => {});
-    console.log("[VoiceOrchestrator] Ready — say 'Nchinda' to continue");
+    console.log("[VoiceOrchestrator] Ready — say 'Nchinda'");
   }
 
   /**
