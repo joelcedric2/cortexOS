@@ -74,8 +74,11 @@ export class TextToSpeech {
   }
 
   async speak(text: string): Promise<void> {
+    // If already speaking, wait for it to finish instead of crashing.
+    // Multiple voice flows (ack, narration, reply) can overlap — queue
+    // them instead of throwing.
     if (this.speaking) {
-      throw new Error("Already speaking. Call stop() first.");
+      await this.waitUntilDone();
     }
     if (!text.trim()) return;
 
@@ -100,6 +103,20 @@ export class TextToSpeech {
     if (this.abortController) {
       this.abortController.abort();
     }
+    this.speaking = false;
+  }
+
+  private waitUntilDone(): Promise<void> {
+    return new Promise((resolve) => {
+      const check = setInterval(() => {
+        if (!this.speaking) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 100);
+      // Safety: don't wait more than 30s
+      setTimeout(() => { clearInterval(check); resolve(); }, 30_000);
+    });
   }
 
   isSpeaking(): boolean {
