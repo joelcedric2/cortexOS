@@ -121,13 +121,13 @@ export class SpeechToText {
       }
     }, this.timeoutMs);
 
-    // When sox exits naturally (silence detected), auto-trigger stopRecording
+    // When sox exits (fixed-duration trim complete), mark recording as done.
+    // The orchestrator's waitForTranscript() polls isRecording() and will
+    // call stopRecording() to run whisper.
     this.soxProcess.on('exit', () => {
       clearTimeout(timeout);
-      if (this.recording) {
-        console.log('[stt] sox exited (silence detected) — transcribing');
-        void this.stopRecording();
-      }
+      console.log("[stt] sox finished recording");
+      this.recording = false;
     });
 
     // Partial transcription every 2s (fire partial with elapsed info)
@@ -149,10 +149,8 @@ export class SpeechToText {
       return t;
     }
 
-    if (!this.recording) {
-      return '';
-    }
-
+    // recording=false means sox already exited (via exit handler) — that's
+    // normal for fixed-duration recording. We still need to transcribe.
     this.recording = false;
 
     if (this.partialTimer) {
@@ -177,9 +175,14 @@ export class SpeechToText {
       this.soxProcess = null;
     }
 
-    if (!this.tmpWav) return '';
+    if (!this.tmpWav) {
+      console.log("[stt] no wav file — returning empty");
+      return "";
+    }
 
+    console.log(`[stt] transcribing ${this.tmpWav}...`);
     const transcript = await this.transcribe(this.tmpWav);
+    console.log(`[stt] whisper result: "${transcript}"`);
 
     // Clean up
     await unlink(this.tmpWav).catch(() => {});

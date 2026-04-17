@@ -173,14 +173,17 @@ export class WakeWordDetector {
         console.log(`[wake-word] heard: "${transcript}"`);
       }
 
+      // Match real variants whisper produces — but NOT loose substrings
+      // like "chinda" alone (catches "chindang", keyboard noise artifacts).
       const hasKeyword =
         transcript.includes("nchinda") ||
         transcript.includes("enchinda") ||
-        transcript.includes("chinda") ||
         transcript.includes("n'chinda") ||
         transcript.includes("in chinda") ||
         transcript.includes("and chinda") ||
-        transcript.includes("hey chinda");
+        transcript.includes("hey chinda") ||
+        transcript.includes("and jinda") ||
+        /\benchinda\b/.test(transcript);
 
       this.onRmsUpdate?.(hasKeyword ? 0.8 : 0.05);
 
