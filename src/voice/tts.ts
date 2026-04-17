@@ -180,6 +180,9 @@ export class TextToSpeech {
   }
 
   private async speakMacos(text: string): Promise<void> {
+    // Never call the real `say` binary during tests — it triggers Siri
+    // and plays audio simultaneously from parallel test runners.
+    if (process.env.CORTEXOS_TEST) return;
     const voice = this.opts.voice ?? 'Samantha';
     await execFileAsync('say', ['-v', voice, text]);
   }
