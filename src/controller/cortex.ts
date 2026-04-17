@@ -90,7 +90,7 @@ export class CortexController {
    * pattern as `schedulerRunFactory`). When absent, a warning-logging echo
    * handler is used as a fallback.
    */
-  private voiceRunFactory: ((transcript: string) => Promise<string>) | null = null;
+  private voiceRunFactory: ((transcript: string, narrate: (update: string) => Promise<void>) => Promise<string>) | null = null;
   // Phase 6 — UI surface. On by default; disable with CORTEXOS_UI=off.
   private eventWSBridge: EventWSBridge | null = null;
   private uiApi: UIApiServer | null = null;
@@ -196,54 +196,89 @@ export class CortexController {
           stateMachine: this.voiceStateMachine,
         });
 
-        const onTask: (transcript: string) => Promise<string> =
+        const onTask: (transcript: string, narrate: (update: string) => Promise<void>) => Promise<string> =
           this.voiceRunFactory
             ? this.voiceRunFactory
-            : async (transcript) => {
-                // Default handler: run the transcript through Claude Code CLI.
-                // This is the whole point of cortexOS — Claude Code has tools,
-                // file access, web, MCP servers, everything. A raw API call
-                // would be a lobotomy.
+            : async (transcript, narrate) => {
                 console.log(`[Nchinda] Processing via Claude CLI: "${transcript}"`);
                 try {
-                  const { execFile: ef } = await import("node:child_process");
-                  const { promisify } = await import("node:util");
-                  const execFileAsync = promisify(ef);
+                  const { spawn: sp } = await import("node:child_process");
 
-                  // claude -p runs non-interactive: takes a prompt, thinks,
-                  // returns the response on stdout, exits. Perfect for voice.
-                  // The system prompt tells Claude this output will be spoken
-                  // aloud, so it should be conversational and concise.
                   const voicePrompt = `[VOICE MODE] Your reply will be spoken aloud via text-to-speech. Be conversational, concise (1-4 sentences for simple questions, more for complex tasks). No markdown, no code blocks, no bullet points — just natural speech. The user said: "${transcript}"`;
-                  const { stdout } = await execFileAsync("claude", [
-                    "-p", voicePrompt,
-                    "--output-format", "text",
-                  ], {
-                    timeout: 120_000, // 2 min max for complex tasks
-                    maxBuffer: 1024 * 1024,
-                    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cortexos-voice" },
+
+                  return await new Promise<string>((resolve) => {
+                    const proc = sp("claude", [
+                      "-p", voicePrompt,
+                      "--output-format", "text",
+                    ], {
+                      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cortexos-voice" },
+                      stdio: ["ignore", "pipe", "pipe"],
+                    });
+
+                    let stdout = "";
+                    let lastNarration = Date.now();
+
+                    // Collect stdout
+                    proc.stdout?.on("data", (chunk: Buffer) => {
+                      stdout += chunk.toString();
+                    });
+
+                    // If the task takes > 15s, narrate that we're still working
+                    const progressTimer = setInterval(async () => {
+                      const elapsed = Math.round((Date.now() - lastNarration) / 1000);
+                      if (elapsed >= 15) {
+                        lastNarration = Date.now();
+                        const updates = [
+                          "Still working on this. Making progress.",
+                          "This is taking a moment. Almost there.",
+                          "Still on it. I'll have something for you shortly.",
+                          "Working through this step by step.",
+                        ];
+                        const msg = updates[Math.floor(Math.random() * updates.length)];
+                        await narrate(msg).catch(() => {});
+                      }
+                    }, 5_000);
+
+                    // Timeout at 5 min
+                    const timeout = setTimeout(() => {
+                      proc.kill("SIGTERM");
+                      clearInterval(progressTimer);
+                      resolve("That task took too long. Try breaking it into smaller pieces.");
+                    }, 300_000);
+
+                    proc.on("close", (code) => {
+                      clearInterval(progressTimer);
+                      clearTimeout(timeout);
+
+                      const reply = stdout.trim();
+                      if (!reply) {
+                        resolve("I processed that but got no output. Try rephrasing.");
+                        return;
+                      }
+
+                      // Truncate for TTS
+                      const spoken = reply.length > 800
+                        ? reply.slice(0, 800) + "... The full response is in the activity journal."
+                        : reply;
+
+                      console.log(`[Nchinda] Reply (${reply.length} chars, exit ${code})`);
+                      resolve(spoken);
+                    });
+
+                    proc.on("error", (err) => {
+                      clearInterval(progressTimer);
+                      clearTimeout(timeout);
+                      if (err.message.includes("ENOENT")) {
+                        resolve("I can't find the Claude CLI. Make sure 'claude' is on your PATH.");
+                      } else {
+                        resolve("Something went wrong while I was working on that. Try again.");
+                      }
+                    });
                   });
-
-                  const reply = stdout.trim();
-                  if (!reply) return "I processed that but got no response. Try rephrasing.";
-
-                  // For TTS, truncate very long replies to first 500 chars
-                  const spoken = reply.length > 500
-                    ? reply.slice(0, 500) + "... I've put the full response in the activity journal."
-                    : reply;
-
-                  console.log(`[Nchinda] Reply (${reply.length} chars): "${spoken.slice(0, 100)}..."`);
-                  return spoken;
                 } catch (err) {
                   const msg = err instanceof Error ? err.message : String(err);
-                  console.error(`[Nchinda] Claude CLI error: ${msg}`);
-                  if (msg.includes("ENOENT")) {
-                    return "I can't find the Claude CLI. Make sure 'claude' is on your PATH.";
-                  }
-                  if (msg.includes("TIMEOUT")) {
-                    return "That task took too long. I'll need to handle it differently — try breaking it down.";
-                  }
-                  return "Something went wrong while I was working on that. Try again.";
+                  console.error(`[Nchinda] Error: ${msg}`);
+                  return "Something went wrong. Try again.";
                 }
               };
 

@@ -47,8 +47,9 @@ export interface VoiceOrchestratorOptions {
   tts: TextToSpeech;
   stateMachine: AudioStateMachine;
   bus: EventBus;
-  /** cortexOS processes the transcript and returns a reply string. */
-  onTask: (transcript: string) => Promise<string>;
+  /** cortexOS processes the transcript and returns a reply string.
+   *  `narrate` lets the handler speak progress updates mid-task. */
+  onTask: (transcript: string, narrate: (update: string) => Promise<void>) => Promise<string>;
   hotkey?: GlobalHotkey;
   /** User name for personalized replies (e.g. "Cedric"). */
   userName?: string;
@@ -92,7 +93,7 @@ export class VoiceOrchestrator {
   private readonly tts: TextToSpeech;
   private readonly sm: AudioStateMachine;
   private readonly bus: EventBus;
-  private readonly onTask: (transcript: string) => Promise<string>;
+  private readonly onTask: (transcript: string, narrate: (update: string) => Promise<void>) => Promise<string>;
   private readonly hotkey: GlobalHotkey | undefined;
   private readonly killSwitch: PerceptionKillSwitch | undefined;
   private readonly audit: AuditLog | undefined;
@@ -374,11 +375,39 @@ export class VoiceOrchestrator {
       this.sm.transition("thinking");
       await this.rearmWakeWord();
 
-      // 8. Process through cortexOS (Claude Code CLI).
-      const reply = await this.onTask(transcript);
+      // 8. Subscribe to bus events during task execution so Nchinda can
+      //    narrate real progress: "The coder just finished. Waiting on tests."
+      const unsubProgress = this.bus.subscribe({ kind: "done" }, async (event) => {
+        if (this.isStale(gen)) return;
+        const role = event.agent_id ?? "an agent";
+        const update = `${role} just finished its work.`;
+        try {
+          this.sm.transition("speaking");
+          await this.tts.speak(update);
+          if (!this.isStale(gen)) this.sm.transition("thinking");
+        } catch {}
+      });
+
+      // 9. Process through cortexOS (Claude Code CLI).
+      //    Pass `narrate` so the handler can speak progress updates
+      //    mid-task: timer-based "still working" + event-based agent completions.
+      const narrate = async (update: string): Promise<void> => {
+        if (this.isStale(gen)) return;
+        try {
+          this.sm.transition("speaking");
+          await this.tts.speak(update);
+          if (!this.isStale(gen)) {
+            this.sm.transition("thinking");
+          }
+        } catch {
+          // TTS failure during narration is non-fatal — task continues
+        }
+      };
+      const reply = await this.onTask(transcript, narrate);
+      unsubProgress(); // stop narrating progress
       if (this.isStale(gen)) return;
 
-      // 9. Transition to speaking — deliver the reply.
+      // 10. Transition to speaking — deliver the reply.
       this.sm.transition("speaking");
 
       // 10. TTS speaks the reply. If the user interrupts (handleWake fires),
