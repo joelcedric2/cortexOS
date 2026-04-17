@@ -104,7 +104,7 @@ export class SpeechToText {
       '-c', '1',      // mono
       '-b', '16',
       this.tmpWav,
-      'norm', '-3',                     // normalize audio to -3dB peak
+      // no gain — mic is fine, model was too small
       'trim', '0', String(recordSec),   // fixed duration recording
     ]);
 
@@ -200,7 +200,7 @@ export class SpeechToText {
     // whisper.cpp installs as `whisper-cli` via brew, not `whisper`
     const whisperBin = process.env.WHISPER_CLI_PATH ?? "whisper-cli";
     const modelPath = process.env.WHISPER_MODEL_PATH
-      ?? `${process.env.HOME}/.cortexos/models/ggml-base.en.bin`;
+      ?? `${process.env.HOME}/.cortexos/models/ggml-small.en.bin`;
 
     const whisperAvailable = await commandExists(whisperBin);
 

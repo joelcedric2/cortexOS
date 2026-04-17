@@ -65,7 +65,7 @@ export class WakeWordDetector {
       ?? "whisper-cli";
     this.modelPath = opts.modelPath
       ?? process.env.WHISPER_MODEL_PATH
-      ?? `${process.env.HOME}/.cortexos/models/ggml-base.en.bin`;
+      ?? `${process.env.HOME}/.cortexos/models/ggml-small.en.bin`;
   }
 
   setOnWake(fn: () => void): void {
@@ -146,7 +146,7 @@ export class WakeWordDetector {
         "-c", "1",
         "-b", "16",
         tmpWav,
-        "norm", "-3",                     // normalize audio to -3dB peak
+        // no gain — mic is fine, model was too small
         "trim", "0", String(this.chunkSec),
       ], (this.chunkSec + 5) * 1000);
 
