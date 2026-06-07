@@ -50,6 +50,8 @@ import { WorktreeManager } from "../workspace/worktree-manager.js";
 import { homedir } from "node:os";
 import { BrainSession } from "../voice/brain-session.js";
 import { buildBrainClaudeMd } from "../voice/brain-context.js";
+import { VoiceMemory } from "../voice/voice-memory.js";
+import { DeepgramVoiceStream } from "../voice/deepgram-stream.js";
 
 export interface CortexConfig {
   sessionName: string;
@@ -134,6 +136,9 @@ export class CortexController {
       this.embedder.initialize(),
     ]);
 
+    // Clean stale audio files from prior sessions (crashes leave them behind)
+    this.cleanStaleAudio().catch(() => {});
+
     // BriefStore depends on both being ready — instantiate now so the
     // Orchestrator can recall prior research into the Designer's prompt.
     this.briefStore = new BriefStore({
@@ -195,6 +200,7 @@ export class CortexController {
         const echoGate = new EchoGate();
         this.wakeWordDetector = new WakeWordDetector({ onWake: () => {}, echoGate });
         const stt = new SpeechToText({});
+
         const tts = new TextToSpeech({});
 
         this.voiceWSBridge = new VoiceWSBridge({
@@ -251,15 +257,52 @@ export class CortexController {
                 }
               };
 
-        this.voiceOrchestrator = new VoiceOrchestrator({
-          wakeWord: this.wakeWordDetector,
-          stt,
-          tts,
-          stateMachine: this.voiceStateMachine,
-          bus: this.bus,
-          onTask,
-          echoGate,
-        });
+        // Wire voice memory so interactions persist to pgvector
+        const voiceMemory = (this.vectorStore && this.embedder)
+          ? new VoiceMemory({ vectorStore: this.vectorStore, embedder: this.embedder, bus: this.bus })
+          : undefined;
+
+        // Deepgram streaming STT — replaces file-based wake + STT when key is set.
+        let deepgram: DeepgramVoiceStream | undefined;
+        if (process.env.DEEPGRAM_API_KEY) {
+          // Create orchestrator first, then wire Deepgram callbacks into it
+          const orchestratorRef = { current: null as VoiceOrchestrator | null };
+          deepgram = new DeepgramVoiceStream({
+            onWake: () => orchestratorRef.current?.triggerWake(),
+            onTranscript: (text) => {
+              console.log(`[Cedric] said: "${text}"`);
+              orchestratorRef.current?.deliverTranscript(text);
+            },
+            onPartial: (text) => {
+              if (text.length > 3) console.log(`[Cedric] ...${text}`);
+            },
+          });
+
+          this.voiceOrchestrator = new VoiceOrchestrator({
+            wakeWord: this.wakeWordDetector,
+            stt,
+            tts,
+            deepgram,
+            stateMachine: this.voiceStateMachine,
+            bus: this.bus,
+            onTask,
+            echoGate,
+            voiceMemory,
+          });
+          orchestratorRef.current = this.voiceOrchestrator;
+        } else {
+          console.log("[Nchinda] No DEEPGRAM_API_KEY — using Groq file-based STT");
+          this.voiceOrchestrator = new VoiceOrchestrator({
+            wakeWord: this.wakeWordDetector,
+            stt,
+            tts,
+            stateMachine: this.voiceStateMachine,
+            bus: this.bus,
+            onTask,
+            echoGate,
+            voiceMemory,
+          });
+        }
 
         await this.voiceWSBridge.start();
         await this.voiceOrchestrator.start();
@@ -630,6 +673,20 @@ export class CortexController {
         ([slot, h]) => `slot${slot}: ${h.provider}/${h.role} (${h.sessionName})`,
       ),
     };
+  }
+
+  private async cleanStaleAudio(): Promise<void> {
+    const { readdir, unlink: rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const tmp = tmpdir();
+    try {
+      const files = await readdir(tmp);
+      const stale = files.filter(f => f.startsWith("cortex-stt-") || f.startsWith("wake-") || f.startsWith("nchinda-tts-"));
+      for (const f of stale) {
+        await rm(`${tmp}/${f}`).catch(() => {});
+      }
+      if (stale.length > 0) console.log(`[CortexOS] Cleaned ${stale.length} stale audio files`);
+    } catch { /* best-effort */ }
   }
 
   async shutdown(): Promise<void> {

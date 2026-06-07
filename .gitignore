@@ -7,3 +7,5 @@ dist/
 .cortexos-agents/
 *.build
 cortexOS-c*
+helpers/cortexos-mic
+.claude/voice-rules.md

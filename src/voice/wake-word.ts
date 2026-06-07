@@ -50,7 +50,7 @@ export class WakeWordDetector {
   private soxProcess: ChildProcess | null = null;
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(opts: WakeWordOptions) {
-    this.keyword = (opts.keyword ?? "nchinda").toLowerCase();
+    this.keyword = (opts.keyword ?? "cortex").toLowerCase();
     this.chunkSec = opts.chunkSec ?? 3;
     this.onWake = opts.onWake;
     this.onRmsUpdate = opts.onRmsUpdate;
@@ -103,11 +103,12 @@ export class WakeWordDetector {
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch (err) {
-        // Sox or Groq error — wait 1s then retry
         const msg = err instanceof Error ? err.message : String(err);
         if (this.listening) {
-          console.warn(`[Nchinda] error: ${msg} — retrying in 1s`);
-          await new Promise((r) => setTimeout(r, 1000));
+          // Rate limit: back off for 10s instead of hammering
+          const backoff = msg.includes("429") ? 10_000 : 1_000;
+          console.warn(`[Nchinda] error: ${msg.slice(0, 80)} — retrying in ${backoff / 1000}s`);
+          await new Promise((r) => setTimeout(r, backoff));
         }
       }
     }
@@ -135,19 +136,21 @@ export class WakeWordDetector {
       // Transcribe with Groq (whisper-large-v3-turbo, free, ~0.3s)
       const result = await transcribeWithGroq(tmpWav, { timeoutMs: 8_000 });
       const transcript = result.text.toLowerCase().trim();
-      if (transcript) {
+      // Only log meaningful speech, not Groq hallucinations on silence.
+      // Groq whisper produces "okay.", "thank you.", "you." etc. on ambient noise.
+      const NOISE = /^(okay|thank you|thanks|you|bye|yeah|yes|no|so|the|and|uh|um|hmm|oh)\.?$/i;
+      if (transcript && transcript.length > 3 && !transcript.match(/^[.\s]+$/) && !NOISE.test(transcript)) {
         console.log(`[Cedric] "${transcript}"`);
       }
-      // Match real variants Groq produces — but NOT loose substrings
-      // like "chinda" alone (catches "chindang", keyboard noise artifacts).
+      // Match "cortex" (primary) and "nchinda" (legacy) variants.
       const hasKeyword =
+        transcript.includes("cortex") ||
         transcript.includes("nchinda") ||
         transcript.includes("enchinda") ||
         transcript.includes("n'chinda") ||
         transcript.includes("in chinda") ||
         transcript.includes("and chinda") ||
         transcript.includes("hey chinda") ||
-        transcript.includes("and jinda") ||
         /\benchinda\b/.test(transcript);
       this.onRmsUpdate?.(hasKeyword ? 0.8 : 0.05);
       return hasKeyword;

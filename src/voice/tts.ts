@@ -138,7 +138,15 @@ export class TextToSpeech {
       if (this.abortController?.signal.aborted) return;
 
       // Play the audio
-      await execFileAsync("afplay", [tmpMp3]);
+      try {
+        await execFileAsync("afplay", [tmpMp3]);
+      } catch (playErr) {
+        const msg = playErr instanceof Error ? playErr.message : String(playErr);
+        console.error(`[Nchinda] afplay failed: ${msg}`);
+        // Retry once — audio device might have been briefly busy
+        await new Promise((r) => setTimeout(r, 500));
+        await execFileAsync("afplay", [tmpMp3]).catch(() => {});
+      }
     } finally {
       await unlink(tmpMp3).catch(() => {});
     }

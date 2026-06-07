@@ -19,6 +19,7 @@ interface CortexConfig {
   keys?: Record<string, string>;
   voice?: Record<string, string | number>;
   defaults?: Record<string, string>;
+  deepgram_api_key?: string;
 }
 
 export function loadCortexConfig(): CortexConfig | null {
@@ -34,6 +35,11 @@ export function loadCortexConfig(): CortexConfig | null {
           process.env[key] = value;
         }
       }
+    }
+
+    // Inject Deepgram key (top-level shorthand, same as keys.DEEPGRAM_API_KEY)
+    if (config.deepgram_api_key && !process.env.DEEPGRAM_API_KEY) {
+      process.env.DEEPGRAM_API_KEY = config.deepgram_api_key;
     }
 
     // Inject defaults the same way

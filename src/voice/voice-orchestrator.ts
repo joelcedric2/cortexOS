@@ -26,6 +26,7 @@ import type {
 import type { RewindResult } from "../rewind/rewind-query.js";
 import type { ConvIntent } from "../intent/conversation-intent.js";
 import type { VoiceMemory } from "./voice-memory.js";
+import type { DeepgramVoiceStream } from "./deepgram-stream.js";
 
 /**
  * Result-surface sink for rewind hits. Wired by the Orchestrator to the
@@ -47,6 +48,8 @@ export interface VoiceOrchestratorOptions {
   wakeWord: WakeWordDetector;
   stt: SpeechToText;
   tts: TextToSpeech;
+  /** When supplied, replaces wakeWord + stt with a single Deepgram stream. */
+  deepgram?: DeepgramVoiceStream;
   stateMachine: AudioStateMachine;
   bus: EventBus;
   /** cortexOS processes the transcript and returns a reply string.
@@ -116,6 +119,9 @@ export class VoiceOrchestrator {
     | undefined;
   private readonly voiceMemory: VoiceMemory | undefined;
   private readonly echoGate: EchoGate | undefined;
+  private readonly deepgram: DeepgramVoiceStream | undefined;
+  /** Resolves when Deepgram delivers a command transcript. */
+  private dgTranscriptResolve: ((text: string) => void) | null = null;
   private lastConvIntentTask: Promise<void> | undefined;
   /** Tracks the memory ID of the current in-flight interaction for markFailed. */
   private lastMemoryId: string | undefined;
@@ -131,6 +137,8 @@ export class VoiceOrchestrator {
    * and bail out if superseded.
    */
   private generation = 0;
+  /** Timer for pulsing RMS values to the waveform during active states. */
+  private rmsPulseTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: VoiceOrchestratorOptions) {
     this.wakeWord = opts.wakeWord;
@@ -149,17 +157,23 @@ export class VoiceOrchestrator {
     this.conversationIntent = opts.conversationIntent;
     this.voiceMemory = opts.voiceMemory;
     this.echoGate = opts.echoGate;
+    this.deepgram = opts.deepgram;
   }
 
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
-    // Wire wake-word trigger.
-    this.wakeWord.setOnWake(() => this.handleWake());
-    await this.wakeWord.start();
+    if (this.deepgram) {
+      // Deepgram streaming mode — single stream handles wake + STT.
+      await this.deepgram.start();
+      console.log("[Nchinda] Deepgram streaming active");
+    } else {
+      // Legacy file-based mode — separate wake-word + STT via Groq.
+      this.wakeWord.setOnWake(() => this.handleWake());
+      await this.wakeWord.start();
+    }
 
-    // Wire hotkey trigger if provided.
     if (this.hotkey) {
       this.hotkey.register();
     }
@@ -168,7 +182,12 @@ export class VoiceOrchestrator {
   stop(): void {
     this.running = false;
     this.generation++; // cancel any in-flight flow
-    this.wakeWord.stop();
+    this.stopRmsPulse();
+    if (this.deepgram) {
+      this.deepgram.stop();
+    } else {
+      this.wakeWord.stop();
+    }
     this.hotkey?.unregister();
   }
 
@@ -182,8 +201,15 @@ export class VoiceOrchestrator {
     // Interruption: if speaking, stop TTS and go straight to listening.
     if (this.sm.getState() === "speaking") {
       this.tts.stop();
-      // Transition directly from speaking to listening (valid per state machine).
       this.sm.transition("listening");
+    }
+
+    // IMMEDIATELY stop wake-word / mute Deepgram to prevent echo
+    // pickup during greeting/acknowledgment TTS.
+    if (this.deepgram) {
+      this.deepgram.setMode("interrupt");
+    } else {
+      this.wakeWord.stop();
     }
 
     // Bump generation to cancel any stale flow.
@@ -196,11 +222,10 @@ export class VoiceOrchestrator {
       ts: new Date(),
     });
 
-    // First activation this session: greet the user before listening.
+    // First activation this session: greet then listen.
     if (!this.greeted) {
       this.greeted = true;
-      const name = this.userName ?? "Sir";
-      const greeting = `Welcome ${name}. I am online and ready. What can I do for you?`;
+      const greeting = `Welcome Sir. I'm online.`;
       this.sm.transition("speaking");
       this.speakWithEchoGate(greeting).then(() => {
         if (this.isStale(this.generation)) return;
@@ -236,18 +261,29 @@ export class VoiceOrchestrator {
         this.sm.transition("listening");
       }
 
-      // 2. PAUSE the wake-word detector so it releases the mic. Two sox
-      //    processes can't share the mic on macOS.
-      this.wakeWord.stop();
-
-      // 3. Start STT recording — sox runs with silence detection and exits
-      //    on its own when the user stops speaking (~1.5s of silence).
+      // 2. Capture the command transcript.
       console.log("[Nchinda] Listening — speak now...");
-      await this.stt.startRecording();
+      this.startRmsPulse(0.4, 0.2);
+      let transcript: string;
 
-      // 4. Wait for sox to finish (silence detected) → auto-calls stopRecording
-      //    which transcribes via Groq. We poll until recording is done.
-      const transcript = await this.waitForTranscript();
+      if (this.deepgram) {
+        // Text-based echo rejection handles TTS bleed — no delay needed.
+        this.deepgram.setMode("command");
+        transcript = await new Promise<string>((resolve) => {
+          this.dgTranscriptResolve = resolve;
+          // Safety timeout
+          setTimeout(() => {
+            if (this.dgTranscriptResolve === resolve) {
+              this.dgTranscriptResolve = null;
+              resolve("");
+            }
+          }, 30_000);
+        });
+      } else {
+        // Legacy file-based — sox records, Groq transcribes.
+        await this.stt.startRecording();
+        transcript = await this.waitForTranscript();
+      }
 
       if (this.isStale(gen)) return;
 
@@ -369,7 +405,9 @@ export class VoiceOrchestrator {
       this.dispatchConversationIntent(transcript);
 
       // 4. Transition to thinking.
+      this.stopRmsPulse();
       this.sm.transition("thinking");
+      this.startRmsPulse(0.15, 0.1); // subtle pulse during thinking
 
       // 5. Emit bus event for task dispatch.
       this.bus.emit({
@@ -378,25 +416,15 @@ export class VoiceOrchestrator {
         ts: new Date(),
       });
 
-      // 6. Acknowledge immediately — don't leave the user in silence
-      //    while Claude processes. Speak a random filler, then think.
-      const acks = [
-        "Got it. Working on that.",
-        "On it. Give me a moment.",
-        "Let me look into this.",
-        "Understood. One second.",
-        "Right away.",
-        "Sure thing. Processing.",
-        "Got it. Just a moment.",
-      ];
-      const ack = acks[Math.floor(Math.random() * acks.length)];
+      // 6. Acknowledge immediately with contextual ack.
+      const ack = buildAck(transcript);
       this.sm.transition("speaking");
       await this.speakWithEchoGate(ack);
       if (this.isStale(gen)) return;
 
-      // 7. Transition to THINKING — waveform shows particles/pulse,
-      //    user knows work is happening. Wake-word stays active for interrupts.
+      // 7. Transition to THINKING — waveform shows particles/pulse.
       this.sm.transition("thinking");
+      this.startRmsPulse(0.15, 0.1);
       await this.rearmWakeWord();
 
       // 8. Subscribe to bus events during task execution so Nchinda can
@@ -456,6 +484,7 @@ export class VoiceOrchestrator {
       }
 
       // 11. Back to idle.
+      this.stopRmsPulse();
       this.sm.transition("idle");
     } catch (err) {
       if (this.isStale(gen)) return;
@@ -479,8 +508,46 @@ export class VoiceOrchestrator {
     }
   }
 
+  /** Trigger wake programmatically (used by Deepgram stream). */
+  triggerWake(): void {
+    this.handleWake();
+  }
+
+  /**
+   * Called by DeepgramVoiceStream when a command transcript is ready.
+   * Resolves the pending promise in processVoiceInteraction.
+   */
+  deliverTranscript(text: string): void {
+    if (this.dgTranscriptResolve) {
+      this.dgTranscriptResolve(text);
+      this.dgTranscriptResolve = null;
+    }
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Start pulsing RMS values to the state machine so the waveform
+   * animates during active states. Pulses at ~20Hz with a sine wave
+   * pattern that varies by state.
+   */
+  private startRmsPulse(baseRms: number, variance: number): void {
+    this.stopRmsPulse();
+    let tick = 0;
+    this.rmsPulseTimer = setInterval(() => {
+      tick++;
+      const rms = baseRms + variance * Math.sin(tick * 0.3);
+      this.sm.transition(this.sm.getState(), Math.max(0, rms));
+    }, 50);
+  }
+
+  private stopRmsPulse(): void {
+    if (this.rmsPulseTimer) {
+      clearInterval(this.rmsPulseTimer);
+      this.rmsPulseTimer = null;
+    }
   }
 
   /**
@@ -490,9 +557,15 @@ export class VoiceOrchestrator {
    */
   private async speakWithEchoGate(text: string): Promise<void> {
     this.echoGate?.mute();
+    this.deepgram?.setMode("interrupt");
+    this.deepgram?.setEchoText(text);
+    this.deepgram?.markTtsStarted();
+    this.startRmsPulse(0.5, 0.3);
     try {
       await this.tts.speak(text);
     } finally {
+      this.stopRmsPulse();
+      this.deepgram?.markTtsEnded();
       this.echoGate?.unmute();
     }
   }
@@ -504,9 +577,14 @@ export class VoiceOrchestrator {
    * distinguish real wake words from TTS playback artifacts.
    */
   private async rearmWakeWord(): Promise<void> {
-    this.wakeWord.setOnWake(() => this.handleWake());
-    await this.wakeWord.start().catch(() => {});
-    console.log("[Nchinda] Ready — say 'Nchinda'");
+    if (this.deepgram) {
+      this.deepgram.setMode("wake");
+      console.log("[Nchinda] Ready — say 'Cortex'");
+    } else {
+      this.wakeWord.setOnWake(() => this.handleWake());
+      await this.wakeWord.start().catch(() => {});
+      console.log("[Nchinda] Ready — say 'Cortex'");
+    }
   }
 
   /**
@@ -573,6 +651,47 @@ function buildRewindReply(results: RewindResult[]): string {
   const hits =
     results.length > 1 ? ` I found ${results.length} possible matches.` : "";
   return `${label}, from ${when}.${hits}`;
+}
+
+/**
+ * Build a dynamic acknowledgment — extracts the topic from the transcript
+ * and describes what action Nchinda will take.
+ */
+function buildAck(transcript: string): string {
+  const topic = extractTopic(transcript);
+  const t = transcript.toLowerCase();
+
+  if (t.includes("happening") || t.includes("going on") || t.includes("news") || t.includes("update"))
+    return `I'll search the web for the latest on ${topic}. One moment.`;
+  if (t.includes("time") || t.includes("date") || t.includes("day"))
+    return `Let me check the time for you.`;
+  if (t.includes("weather"))
+    return `I'll pull up the weather for ${topic}. One moment.`;
+  if (t.includes("send") || t.includes("email") || t.includes("message"))
+    return `I'll draft that for you now. Give me a moment.`;
+  if (t.includes("open") || t.includes("launch") || t.includes("start"))
+    return `Opening ${topic} for you now.`;
+  if (t.includes("search") || t.includes("find") || t.includes("look"))
+    return `I'll search for ${topic}. One moment.`;
+  if (t.includes("create") || t.includes("build") || t.includes("make") || t.includes("write"))
+    return `I'll start working on ${topic} for you now.`;
+  if (t.includes("?") || t.includes("what") || t.includes("how") || t.includes("why"))
+    return `Good question. Let me look into ${topic} for you.`;
+  return `Understood. I'll work on ${topic} for you now.`;
+}
+
+/** Extract the meaningful topic from a transcript, stripping filler words. */
+function extractTopic(transcript: string): string {
+  let topic = transcript
+    .replace(/[?.!,]+$/g, "")
+    .replace(/^(what's|what is|whats|tell me about|give me|show me|can you|could you|please|hey|cortex)\s+/gi, "")
+    .replace(/^(the latest|an update|updates|the current|the)\s+/gi, "")
+    .replace(/^(on|about|for|in|at|with)\s+/gi, "")
+    .trim();
+  // If stripping left nothing meaningful, use "that"
+  if (!topic || topic.length < 3) return "that";
+  // Lowercase first letter for natural flow in a sentence
+  return topic.charAt(0).toLowerCase() + topic.slice(1);
 }
 
 function friendlyWhen(iso: string): string {

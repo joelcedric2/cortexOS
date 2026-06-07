@@ -73,20 +73,23 @@ export class SpeechToText {
     this.recording = true;
     this.recordingStartedAt = Date.now();
 
-    // Fixed 10s recording. Sox silence detection was unreliable on this
-    // Mac — it strips "leading silence" from the output, producing 0-byte
-    // files in quiet rooms. Groq handles trailing silence perfectly (just
-    // returns "" for non-speech), so we record a fixed window and let
-    // Groq sort out what's speech vs silence.
-    const maxSec = 10;
-    console.log("[Nchinda] Recording for 10s...");
+    // Open-ended recording with two-stage silence detection:
+    //   Stage 1: Wait for speech — 0.2s above 0.5% threshold to start.
+    //            Discards pre-speech silence (the gap between "Listening..."
+    //            and when the user starts talking). 0.5% is very sensitive —
+    //            any speech triggers it, but ambient silence doesn't.
+    //   Stage 2: Stop after 2s of silence (end-of-speech).
+    //
+    // If nobody speaks, sox produces a 0-byte file → Groq returns "" →
+    // orchestrator goes back to idle. That's the correct behavior.
+    console.log("[Nchinda] Listening...");
     this.soxProcess = execFile('sox', [
       '-d',
       '-r', '16000',
       '-c', '1',
       '-b', '16',
       this.tmpWav,
-      'trim', '0', String(maxSec),
+      'silence', '1', '0.2', '0.5%', '1', '2.0', '2%',
     ]);
 
     this.soxProcess.on('error', (err) => {
@@ -94,13 +97,14 @@ export class SpeechToText {
       this.recording = false;
     });
 
-    // Safety timeout at 65s
+    // Safety timeout at 120s — open-ended recording relies on sox silence
+    // detection to stop, but we cap at 2 minutes for edge cases.
     const timeout = setTimeout(() => {
       if (this.recording) {
-        console.log('[stt] recording timeout (60s) — stopping');
+        console.log('[stt] recording timeout (120s) — stopping');
         this.recording = false;
       }
-    }, 65_000);
+    }, 120_000);
 
     // When sox exits (silence detected or max duration), mark done.
     this.soxProcess.on('exit', () => {
